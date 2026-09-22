@@ -109,6 +109,13 @@ audit trail, `style_notes.md`). Render Cron Jobs reset their filesystem on
 every run — that's why this state can't just live on local disk in
 production, and why `store.py` exists.
 
+**Cost**: Render itself is paid once this is live — roughly $10/mo for the
+Key Value instance (the smallest *persistent* tier; Render's free Key Value
+tier explicitly isn't durable across restarts, so it's not used here) plus
+each cron job's $1/mo minimum, prorated up by actual runtime. Verify current
+numbers in the Render dashboard before going live. This is separate from,
+and on top of, whatever the client's own Anthropic/Apollo usage costs.
+
 1. Push this repo to your own private GitHub repo.
 2. In `render.yaml`, replace every `acme-corp` with your real
    `deployment_id`, and `APOLLO_API_KEY_ACME_CORP` with your real env var

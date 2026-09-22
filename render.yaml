@@ -16,11 +16,20 @@
 # only (no public internet access) — verify this still reads as "internal
 # only, no external access needed" in the Render dashboard when you set it
 # up, since exact defaults can change.
+#
+# plan is deliberately NOT "free": Render's own docs say free Key Value
+# instances aren't durable ("a restart, maintenance event, or upgrade can
+# result in data loss... not appropriate as a durable production
+# datastore"). That's exactly the OAuth tokens and drafts state this store
+# exists to protect, so this pays for the smallest persistent tier
+# (256mb, ~$10/mo at time of writing — verify current price in the Render
+# dashboard) rather than risk silently losing a customer's Gmail/Outlook
+# token on a routine restart.
 
 services:
   - type: keyvalue
     name: outbound-agent-kv
-    plan: free
+    plan: 256mb
     ipAllowList: []
     maxmemoryPolicy: noeviction   # durable state (OAuth tokens, audit trail), not a cache — never evict
     persistenceMode: journal-snapshot

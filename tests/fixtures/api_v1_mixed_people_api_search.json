@@ -1,0 +1,23 @@
+{
+  "people": [
+    {
+      "id": "7b0a4c3d1e5f6a7b8c9d0e1f",
+      "first_name": "Jordan",
+      "last_name": "Reyes",
+      "name": "Jordan Reyes",
+      "title": "VP Sales",
+      "seniority": "vp",
+      "organization_id": "5f8e2a1b9c3d4e5f6a7b8c9d"
+    },
+    {
+      "id": "8c1b5d4e2f6a7b8c9d0e1f2a",
+      "first_name": "Priya",
+      "last_name": "Nair",
+      "name": "Priya Nair",
+      "title": "Director of Revenue Operations",
+      "seniority": "director",
+      "organization_id": "5f8e2a1b9c3d4e5f6a7b8c9d"
+    }
+  ],
+  "pagination": {"page": 1, "per_page": 25, "total_entries": 2, "total_pages": 1}
+}

@@ -1,0 +1,12 @@
+{
+  "organization": {
+    "id": "5f8e2a1b9c3d4e5f6a7b8c9d",
+    "name": "Acme Robotics",
+    "primary_domain": "acmerobotics.example.com",
+    "industry": "industrial automation",
+    "estimated_num_employees": 180,
+    "technology_names": ["Salesforce", "HubSpot", "AWS"],
+    "short_description": "Builds warehouse picking robots for mid-market 3PLs.",
+    "recent_signals": ["Raised Series B, 2026-06", "Hiring 3 VP Sales roles"]
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "matches": [
+    {
+      "id": "7b0a4c3d1e5f6a7b8c9d0e1f",
+      "name": "Jordan Reyes",
+      "title": "VP Sales",
+      "email": "jordan.reyes@acmerobotics.example.com",
+      "email_status": "verified",
+      "organization_id": "5f8e2a1b9c3d4e5f6a7b8c9d"
+    },
+    {
+      "id": "8c1b5d4e2f6a7b8c9d0e1f2a",
+      "name": "Priya Nair",
+      "title": "Director of Revenue Operations",
+      "email": "priya.nair@acmerobotics.example.com",
+      "email_status": "verified",
+      "organization_id": "5f8e2a1b9c3d4e5f6a7b8c9d"
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "organizations": [
+    {
+      "id": "5f8e2a1b9c3d4e5f6a7b8c9d",
+      "name": "Acme Robotics",
+      "website_url": "https://acmerobotics.example.com",
+      "primary_domain": "acmerobotics.example.com",
+      "industry": "industrial automation",
+      "estimated_num_employees": 180,
+      "organization_city": "Austin",
+      "organization_state": "TX",
+      "organization_country": "United States"
+    },
+    {
+      "id": "6a9f3b2c0d4e5f6a7b8c9d0e",
+      "name": "Northwind Analytics",
+      "website_url": "https://northwindanalytics.example.com",
+      "primary_domain": "northwindanalytics.example.com",
+      "industry": "data analytics software",
+      "estimated_num_employees": 95,
+      "organization_city": "Seattle",
+      "organization_state": "WA",
+      "organization_country": "United States"
+    }
+  ],
+  "pagination": {"page": 1, "per_page": 25, "total_entries": 2, "total_pages": 1}
+}

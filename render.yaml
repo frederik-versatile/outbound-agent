@@ -1,0 +1,62 @@
+# Render blueprint for one customer deployment of the outbound agent.
+# Deploy: connect this repo in the Render dashboard -> "New Blueprint" ->
+# it reads this file and creates all three services below in one go.
+#
+# Scoped to a single deployment_id (see README "Scope" — this project is
+# built for one client right now). To onboard a second client, duplicate
+# the two cron services below with a different --deployment value and a
+# new service name; the keyvalue store and its REDIS_URL wiring can be
+# shared across deployments since every key is already namespaced by
+# deployment_id (see store.py / deployment.py's secret_key/state_key).
+#
+# BEFORE DEPLOYING: replace "acme-corp" below with your real deployment_id,
+# matching a file at config/deployments/<deployment_id>.yaml.
+#
+# ipAllowList: [] restricts the keyvalue instance to internal Render traffic
+# only (no public internet access) — verify this still reads as "internal
+# only, no external access needed" in the Render dashboard when you set it
+# up, since exact defaults can change.
+
+services:
+  - type: keyvalue
+    name: outbound-agent-kv
+    plan: free
+    ipAllowList: []
+    maxmemoryPolicy: noeviction   # durable state (OAuth tokens, audit trail), not a cache — never evict
+    persistenceMode: journal-snapshot
+
+  - type: cron
+    name: outbound-agent-pipeline
+    runtime: python
+    schedule: "0 13 * * *"   # daily, 13:00 UTC — adjust to your timezone/preference
+    buildCommand: pip install -r requirements.txt
+    startCommand: python orchestrator.py run --deployment acme-corp
+    envVars:
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: outbound-agent-kv
+          property: connectionString
+      - key: ANTHROPIC_API_KEY
+        sync: false   # set in the Render dashboard, not committed to the repo
+      - key: APOLLO_API_KEY_ACME_CORP
+        sync: false
+      - key: STRIPE_API_KEY
+        sync: false
+
+  - type: cron
+    name: outbound-agent-poller
+    runtime: python
+    schedule: "0 */4 * * *"   # every 4 hours
+    buildCommand: pip install -r requirements.txt
+    startCommand: python poll_for_edits.py --deployment acme-corp
+    envVars:
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: outbound-agent-kv
+          property: connectionString
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: STRIPE_API_KEY
+        sync: false

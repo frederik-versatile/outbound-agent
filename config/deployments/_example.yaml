@@ -1,0 +1,60 @@
+# Copy this file to <deployment_id>.yaml (e.g. acme-corp.yaml) to onboard a new
+# customer. deployment_id must match the filename (without .yaml) and is passed
+# on the command line as --deployment <deployment_id>.
+
+deployment_id: example
+
+mail_provider: gmail  # gmail | outlook
+
+# OAuth tokens (gmail_client_secret.json + gmail_token.json, or
+# outlook_token.json) live in deployment.store — see store.py — written by
+# setup_oauth_gmail.py / setup_oauth_outlook.py, never in this file.
+# client_id/tenant_id below are not secret, just Outlook's app registration.
+outlook:
+  client_id: ""
+  tenant_id: ""
+
+# Gates every scheduled run (orchestrator.py and poll_for_edits.py) on this
+# customer's Stripe subscription being active/trialing — see billing.py.
+# Leave stripe_subscription_id empty and every run refuses to start.
+billing:
+  stripe_subscription_id: ""
+
+# Name of the .env variable holding this customer's Apollo API key.
+apollo_api_key_env: APOLLO_API_KEY_EXAMPLE
+
+# Docs this deployment reads from.
+icp_doc: config/icp_criteria/example.md
+positioning_doc: config/positioning/example.md
+
+# Target buyer titles/seniorities the discovery stage searches for, in addition
+# to whatever the ICP doc itself specifies.
+target_titles:
+  - "VP Sales"
+  - "Head of Sales"
+  - "Director of Revenue Operations"
+target_seniorities:
+  - "vp"
+  - "director"
+  - "head"
+
+# Model per stage. Prioritization is judgment-heavy (worth a stronger model);
+# discovery and learning are narrower, more mechanical tasks.
+models:
+  prioritization: claude-opus-4-6
+  discovery: claude-sonnet-5
+  drafting: claude-sonnet-5
+  learning: claude-sonnet-5
+
+safety:
+  dry_run_default: true          # every run is a dry run until a human flips this per deployment
+  max_accounts_per_run: 25
+  max_contacts_per_account: 2
+  max_total_enrich_calls_per_run: 50   # Apollo enrichment is metered — real money per call
+  max_drafts_per_run: 25
+
+# Learning loop tuning (used by poll_for_edits.py / learning_agent).
+learning:
+  enable_stable_draft_signal: false   # see plan: off by default, half-finished edits teach the wrong lesson
+  stable_draft_settle_hours: 6
+  style_notes_token_budget: 4000      # trigger a consolidation pass above this size

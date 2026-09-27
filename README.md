@@ -40,13 +40,33 @@ or still inside the recycle cooldown before drafting.
 #### Engagement tracking
 
 Gmail and Outlook expose no API for "did they open/click this" — there's no
-webhook for it. The only way to get that signal at all is a self-hosted
+webhook for it. HubSpot doesn't help either, even with the mailbox
+connected to HubSpot's Sales extension: HubSpot's own community forum,
+knowledge base, and the documented properties on the CRM `emails` object
+all confirm connected-inbox open/click data is UI-only, not exposed via
+their API (checked directly, not assumed — see the API's actual property
+list: `hs_email_status`, `hs_email_subject`, from/to fields, no tracking
+metrics). The only way to get real open/click data at all is a self-hosted
 tracking pixel + rewritten links, which needs an always-on web service (not
 just cron jobs) and is a genuinely noisy signal in practice (corporate
 security scanners auto-open/click inbound mail while scanning for threats,
 before a human ever sees it). v1 deliberately skips this and branches on
 reply only — `advance_sequences.py` is where that would plug in if it's
 ever added.
+
+### Hire-sheet cross-reference
+
+Some customers already track their own buying signal in a spreadsheet
+(e.g. "companies currently hiring a videographer"). `config/deployments/
+<id>.yaml`'s `hire_sheet:` section (disabled by default) points at that
+sheet; `orchestrator.py`'s `cross_reference_hire_sheet()` reads it via a
+read-only Google Sheets service account (`clients/sheets_client.py`,
+`setup_google_sheets.py`) and **boosts, never introduces** — Apollo search
+from the ICP doc is still the only way an account enters the pipeline; a
+domain match on the sheet just raises that account's score (capped at 100)
+and appends a rationale note. A sheet read failure logs a warning and
+leaves scores untouched rather than failing the whole run over what's
+meant to be a secondary signal.
 
 ## Setup
 
@@ -82,6 +102,15 @@ YAML says).
 
 ```bash
 python setup_apollo.py --deployment acme-corp
+```
+
+Optional — only if this customer has a hire-signal sheet to cross-reference
+(see "Hire-sheet cross-reference" above): set `hire_sheet.enabled: true` and
+`spreadsheet_id`/`range` in `acme-corp.yaml`, share the sheet with the
+service account's email, then:
+
+```bash
+python setup_google_sheets.py --deployment acme-corp --key-file ~/Downloads/service-account-key.json
 ```
 
 ### Mailbox OAuth
@@ -254,13 +283,14 @@ advance_sequences.py       Reply detection, follow-up/breakup drafting, recyclin
 setup_oauth_gmail.py        One-time Gmail OAuth per deployment
 setup_oauth_outlook.py      One-time Outlook OAuth per deployment
 setup_apollo.py             Validates an Apollo API key per deployment
+setup_google_sheets.py      One-time Sheets service-account setup (optional, hire-sheet only)
 render.yaml                Cloud deployment blueprint (3 cron jobs + Key Value)
-config/deployments/         One YAML per customer (mail provider, limits, billing id)
+config/deployments/         One YAML per customer (mail provider, limits, billing id, hire sheet)
 config/icp_criteria/        One ICP doc per customer
 config/positioning/         One positioning/value-prop doc per customer
 config/sequences/           One cadence doc per customer (steps, wait times, recycle window)
 secrets/                    Local-dev-only OAuth token cache (gitignored) — see store.py
-clients/                    Thin API wrappers (Apollo, Gmail, Outlook, facade)
+clients/                    Thin API wrappers (Apollo, Gmail, Outlook, Sheets, mailbox facade)
 agents/                     System prompt + tool allowlist per pipeline stage
 tools/                      @tool wrappers exposing clients to each stage
 state/<id>/runs/            Per-run scratch files only (ephemeral, local disk is fine)

@@ -61,6 +61,20 @@ class SequenceConfig:
 
 
 @dataclass
+class HireSheetConfig:
+    """Optional cross-reference against a customer-tracked buying-signal
+    sheet — never the primary source of accounts, only a score boost/
+    annotation for Apollo-sourced accounts that also appear on it. See
+    orchestrator.py's cross_reference_hire_sheet()."""
+    enabled: bool = False
+    spreadsheet_id: str = ""
+    range: str = "Sheet1!A2:B"
+    name_column: int = 0
+    domain_column: int = 1
+    score_boost: int = 15
+
+
+@dataclass
 class Deployment:
     deployment_id: str
     mail_provider: str
@@ -73,6 +87,7 @@ class Deployment:
     safety: SafetyLimits
     learning: LearningConfig
     sequence: SequenceConfig
+    hire_sheet: HireSheetConfig
     store: Store
     outlook_client_id: str = ""
     outlook_tenant_id: str = ""
@@ -132,6 +147,7 @@ def load_deployment(deployment_id: str) -> Deployment:
     learning_raw = raw.get("learning", {})
     outlook_raw = raw.get("outlook", {})
     billing_raw = raw.get("billing", {})
+    hire_sheet_raw = raw.get("hire_sheet", {})
     sequence = _load_sequence(deployment_id)
 
     return Deployment(
@@ -156,6 +172,14 @@ def load_deployment(deployment_id: str) -> Deployment:
             style_notes_token_budget=learning_raw.get("style_notes_token_budget", 4000),
         ),
         sequence=sequence,
+        hire_sheet=HireSheetConfig(
+            enabled=hire_sheet_raw.get("enabled", False),
+            spreadsheet_id=hire_sheet_raw.get("spreadsheet_id", ""),
+            range=hire_sheet_raw.get("range", "Sheet1!A2:B"),
+            name_column=hire_sheet_raw.get("name_column", 0),
+            domain_column=hire_sheet_raw.get("domain_column", 1),
+            score_boost=hire_sheet_raw.get("score_boost", 15),
+        ),
         store=build_store(ROOT),
         outlook_client_id=outlook_raw.get("client_id", ""),
         outlook_tenant_id=outlook_raw.get("tenant_id", ""),

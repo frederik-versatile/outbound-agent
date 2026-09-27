@@ -23,6 +23,22 @@ billing:
 # Name of the .env variable holding this customer's Apollo API key.
 apollo_api_key_env: APOLLO_API_KEY_EXAMPLE
 
+# Optional: cross-references Apollo-sourced accounts against a customer's
+# own tracked buying-signal sheet (e.g. "companies currently hiring a
+# videographer"). NEVER the primary source of accounts — prioritization
+# still runs Apollo search from the ICP doc; a hire-sheet match only boosts
+# an already-scored account's score and appends a rationale note. Leave
+# enabled: false (or omit this whole section) to skip it entirely.
+# Requires setup_google_sheets.py and sharing the sheet with the service
+# account it creates.
+hire_sheet:
+  enabled: false
+  spreadsheet_id: ""
+  range: "Sheet1!A2:B"    # company name in column A, domain in column B
+  name_column: 0
+  domain_column: 1
+  score_boost: 15
+
 # Docs this deployment reads from.
 icp_doc: config/icp_criteria/example.md
 positioning_doc: config/positioning/example.md

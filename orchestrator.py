@@ -29,6 +29,7 @@ from billing import SubscriptionInactive, require_active_subscription
 from deployment import Deployment, load_deployment
 from clients.apollo_client import ApolloClient
 from clients.mailbox_client import MailboxClient
+from clients.sheets_client import SheetsClient
 from tools.fs_tools import (
     build_prioritization_fs_tools,
     build_discovery_fs_tools,
@@ -74,6 +75,50 @@ async def _run_stage(prompt: str, options: ClaudeAgentOptions, log, stage: str) 
     log(stage, "finished")
 
 
+def _normalize_domain(raw: str) -> str:
+    domain = raw.strip().lower()
+    for prefix in ("https://", "http://", "www."):
+        if domain.startswith(prefix):
+            domain = domain[len(prefix):]
+    return domain.split("/")[0]
+
+
+def cross_reference_hire_sheet(deployment: Deployment, accounts: list[dict[str, Any]], log) -> list[dict[str, Any]]:
+    """Boosts (never introduces) accounts that also appear on the customer's
+    hire-sheet — see deployment.py's HireSheetConfig docstring. Never the
+    primary source of accounts; a read/parse failure here logs a warning
+    and leaves accounts unmodified rather than failing the whole run over
+    what's meant to be a secondary signal."""
+    if not deployment.hire_sheet.enabled or not deployment.hire_sheet.spreadsheet_id:
+        return accounts
+
+    try:
+        client = SheetsClient(deployment)
+        rows = client.read_range(deployment.hire_sheet.spreadsheet_id, deployment.hire_sheet.range)
+    except Exception as exc:
+        log("prioritization", "hire_sheet_read_failed", str(exc))
+        return accounts
+
+    sheet_domains: set[str] = set()
+    for row in rows:
+        if len(row) > deployment.hire_sheet.domain_column and row[deployment.hire_sheet.domain_column]:
+            sheet_domains.add(_normalize_domain(row[deployment.hire_sheet.domain_column]))
+
+    matched = 0
+    for account in accounts:
+        account_domain = _normalize_domain(account.get("domain", ""))
+        if account_domain and account_domain in sheet_domains:
+            account["score"] = min(100, account.get("score", 0) + deployment.hire_sheet.score_boost)
+            account["rationale"] = (
+                account.get("rationale", "").rstrip(". ")
+                + f". Also confirmed on the customer's hire-signal sheet (+{deployment.hire_sheet.score_boost})."
+            )
+            matched += 1
+
+    log("prioritization", "hire_sheet_matches", str(matched))
+    return accounts
+
+
 async def run_prioritization(deployment: Deployment, run_dir: Path, apollo: ApolloClient, log) -> list[dict[str, Any]]:
     options = ClaudeAgentOptions(
         tools=[],  # disable ALL built-in tools (Bash, Read, Write, WebFetch, ...) — see module docstring
@@ -98,6 +143,10 @@ async def run_prioritization(deployment: Deployment, run_dir: Path, apollo: Apol
     if not result_path.exists():
         raise RuntimeError("prioritization stage finished without writing accounts_scored.json")
     accounts = json.loads(result_path.read_text())
+
+    # Cross-reference BEFORE the cap, since a hire-sheet match can boost an
+    # account's score enough to make the cut.
+    accounts = cross_reference_hire_sheet(deployment, accounts, log)
 
     # Python-level cap, independent of whatever the agent already did.
     accounts = sorted(accounts, key=lambda a: a.get("score", 0), reverse=True)

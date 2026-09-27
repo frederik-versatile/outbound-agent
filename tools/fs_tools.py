@@ -90,6 +90,29 @@ def build_drafting_fs_tools(deployment: Deployment, run_dir: Path) -> list:
     return [read_stakeholders, read_scored_accounts, read_positioning_doc, read_style_notes]
 
 
+def build_sequence_fs_tools(deployment: Deployment) -> list:
+    """For sequence_agent (advance_sequences.py) — drafting a follow-up step
+    needs the positioning doc and style notes, but NOT read_stakeholders/
+    read_scored_accounts, since advance_sequences.py already has the one
+    lead's account/stakeholder/prior-email context and puts it directly in
+    the prompt rather than making the agent look it up itself."""
+
+    @tool("read_positioning_doc", "Read this deployment's positioning/value-prop doc.", {})
+    async def read_positioning_doc(args: dict[str, Any]) -> dict[str, Any]:
+        return {"content": [{"type": "text", "text": deployment.read_positioning_doc()}]}
+
+    @tool(
+        "read_style_notes",
+        "Read the current learned style guide for this deployment. Empty string if none exists yet.",
+        {},
+    )
+    async def read_style_notes(args: dict[str, Any]) -> dict[str, Any]:
+        text = deployment.store.read_text(deployment.state_key("learning", "style_notes.md")) or ""
+        return {"content": [{"type": "text", "text": text}]}
+
+    return [read_positioning_doc, read_style_notes]
+
+
 def build_learning_fs_tools(deployment: Deployment) -> list:
     style_notes_key = deployment.state_key("learning", "style_notes.md")
     diff_log_key = deployment.state_key("learning", "edit_diffs_log.jsonl")

@@ -24,6 +24,7 @@ from typing import Any
 
 from claude_agent_sdk import ClaudeAgentOptions, create_sdk_mcp_server, query
 
+import sequencing
 from billing import SubscriptionInactive, require_active_subscription
 from deployment import Deployment, load_deployment
 from clients.apollo_client import ApolloClient
@@ -139,9 +140,19 @@ async def run_discovery(deployment: Deployment, run_dir: Path, apollo: ApolloCli
     capped: list[dict[str, Any]] = []
     for _, people in by_account.items():
         capped.extend(people[: deployment.safety.max_contacts_per_account])
+
+    # Suppress anyone already mid-sequence, already replied, or still inside
+    # the recycle cooldown — without this, the pipeline would draft a fresh
+    # cold opener to the SAME person every time it runs. See sequencing.py.
+    sequence_entries = sequencing.load_sequences(deployment)
+    before_suppression = len(capped)
+    capped = [s for s in capped if not sequencing.is_suppressed(sequence_entries, s.get("email", ""))]
+    suppressed_count = before_suppression - len(capped)
+
     result_path.write_text(json.dumps(capped, indent=2))
 
     log("discovery", "apollo_credits_used", str(apollo.credits_used_this_run()))
+    log("discovery", "suppressed_existing_leads", str(suppressed_count))
     return capped
 
 
@@ -149,11 +160,10 @@ async def run_drafting(
     deployment: Deployment, run_dir: Path, dry_run: bool, mailbox_override: str | None, log
 ) -> None:
     if dry_run:
-        preview_dir = run_dir / "drafts_preview"
-        mcp_mailbox = preview_mailbox_server(preview_dir, deployment.safety.max_drafts_per_run)
+        mcp_mailbox = preview_mailbox_server(run_dir, deployment.safety.max_drafts_per_run, sequence_step=0)
     else:
         mailbox = MailboxClient(deployment, provider_override=mailbox_override)
-        mcp_mailbox = mailbox_server(mailbox, deployment, deployment.safety.max_drafts_per_run)
+        mcp_mailbox = mailbox_server(mailbox, deployment, deployment.safety.max_drafts_per_run, run_dir, sequence_step=0)
 
     options = ClaudeAgentOptions(
         tools=[],  # disable ALL built-in tools — mailbox_create_draft is its only write capability
@@ -173,6 +183,11 @@ async def run_drafting(
         + (" This is a DRY RUN: drafts are written to local preview files only." if dry_run else "")
     )
     await _run_stage(prompt, options, log, "drafting")
+
+    drafts_created_path = run_dir / "drafts_created.json"
+    drafts_created = json.loads(drafts_created_path.read_text()) if drafts_created_path.exists() else []
+    sequencing.seed_step_zero(deployment, drafts_created)
+    log("drafting", "sequences_seeded", str(len(drafts_created)))
 
 
 async def main_async(args: argparse.Namespace) -> None:

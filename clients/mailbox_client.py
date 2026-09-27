@@ -76,13 +76,77 @@ class MailboxClient:
         else:
             raise ValueError(f"Unknown mail_provider: {provider!r}")
 
-    def create_draft(self, to: str, subject: str, body_text: str, tracking_id: str) -> dict[str, Any]:
+    def create_draft(
+        self,
+        to: str,
+        subject: str,
+        body_text: str,
+        tracking_id: str,
+        thread_id: str | None = None,
+        in_reply_to: str | None = None,
+    ) -> dict[str, Any]:
+        """thread_id/in_reply_to are set for sequence follow-up steps, so the
+        draft lands in the SAME conversation as the earlier step rather than
+        as a fresh cold email — see advance_sequences.py."""
         if self.provider == "gmail":
-            result = self._impl.create_draft(to=to, subject=subject, body_text=body_text, tracking_id=tracking_id)
-            return {"draft_ref": result["id"], "provider": "gmail", "raw": result}
+            result = self._impl.create_draft(
+                to=to, subject=subject, body_text=body_text, tracking_id=tracking_id,
+                thread_id=thread_id, in_reply_to=in_reply_to,
+            )
+            return {
+                "draft_ref": result["id"],
+                "provider": "gmail",
+                "thread_id": result.get("message", {}).get("threadId"),
+                "raw": result,
+            }
         else:
-            result = self._impl.create_draft(to=[to], subject=subject, body_text=body_text, tracking_id=tracking_id)
-            return {"draft_ref": result["id"], "provider": "outlook", "raw": result}
+            result = self._impl.create_draft(
+                to=[to], subject=subject, body_text=body_text, tracking_id=tracking_id,
+                conversation_id=thread_id,
+            )
+            return {
+                "draft_ref": result["id"],
+                "provider": "outlook",
+                "thread_id": result.get("conversationId"),
+                "raw": result,
+            }
+
+    def check_reply(self, thread_id: str, recipient_email: str) -> dict[str, Any]:
+        """Checks a thread for any message from recipient_email (a reply).
+
+        Returns {"has_reply": bool, "last_message_id_header": str | None} —
+        the latter is the Message-ID header of the most recent message in
+        the thread, used as in_reply_to when NO reply was found and a
+        follow-up step needs to thread onto our own last message. Only
+        meaningful for Gmail (RFC In-Reply-To); Outlook threads purely via
+        conversationId, so it's returned but unused on that path.
+        """
+        recipient_email = recipient_email.lower()
+
+        if self.provider == "gmail":
+            thread = self._impl.get_thread(thread_id)
+            if thread is None:
+                return {"has_reply": False, "last_message_id_header": None}
+            messages = thread.get("messages", [])
+            has_reply = False
+            last_message_id_header = None
+            for message in messages:
+                headers = {h["name"]: h["value"] for h in message.get("payload", {}).get("headers", [])}
+                if recipient_email in headers.get("From", "").lower():
+                    has_reply = True
+                if headers.get("Message-Id") or headers.get("Message-ID"):
+                    last_message_id_header = headers.get("Message-Id") or headers.get("Message-ID")
+            return {"has_reply": has_reply, "last_message_id_header": last_message_id_header}
+
+        else:
+            messages = self._impl.list_conversation_messages(thread_id)
+            messages = sorted(messages, key=lambda m: m.get("receivedDateTime", ""))
+            has_reply = any(
+                recipient_email in (m.get("from", {}).get("emailAddress", {}).get("address", "") or "").lower()
+                for m in messages
+            )
+            last_message_id_header = messages[-1].get("internetMessageId") if messages else None
+            return {"has_reply": has_reply, "last_message_id_header": last_message_id_header}
 
     def get_draft(self, draft_ref: str) -> dict[str, Any] | None:
         return self._impl.get_draft(draft_ref)

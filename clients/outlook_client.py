@@ -129,6 +129,19 @@ class OutlookClient:
         resp.raise_for_status()
         return resp.json()
 
+    def list_conversation_messages(self, conversation_id: str) -> list[dict[str, Any]]:
+        """GET /me/messages filtered by conversationId — spans the mailbox's
+        default folders (Inbox, Sent, etc.), used to check a thread for a
+        reply from the recipient (sequence follow-ups)."""
+        resp = requests.get(
+            f"{GRAPH_HOST}/{GRAPH_VERSION}/me/messages",
+            headers=self._headers(),
+            params={"$filter": f"conversationId eq '{conversation_id}'", "$top": 50},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        return resp.json().get("value", [])
+
     def get_sent_message_by_tracking_id(self, tracking_id: str) -> dict[str, Any] | None:
         """Searches Sent Items for a message carrying this tracking header,
         used once a draft has disappeared (see poll_for_edits.py)."""

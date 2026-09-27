@@ -120,6 +120,21 @@ class GmailClient:
                 return None
             raise
 
+    def get_thread(self, thread_id: str) -> dict[str, Any] | None:
+        """users.threads.get — used to check a thread for a reply from the
+        recipient (sequence follow-ups)."""
+        try:
+            return (
+                self._service.users()
+                .threads()
+                .get(userId="me", id=thread_id, format="metadata", metadataHeaders=["From", "Message-Id"])
+                .execute()
+            )
+        except Exception as exc:
+            if getattr(getattr(exc, "resp", None), "status", None) == 404:
+                return None
+            raise
+
     def find_sent_by_tracking_id(self, tracking_id: str) -> dict[str, Any] | None:
         """Searches Sent Mail for a message carrying this tracking header."""
         resp = (

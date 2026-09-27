@@ -5,19 +5,27 @@ change between dry-run and live — only what's behind the tool changes.
 Writes composed emails to state/<deployment_id>/runs/<run_id>/drafts_preview/*.md
 instead of calling any mailbox API at all. This is what safety.dry_run_default
 uses by default for every new deployment until a human explicitly disables it.
+
+Also writes run_dir/drafts_created.json, same schema as the live path, so
+the suppression/sequence-seeding logic in orchestrator.py is exercisable
+end-to-end in dry-run — see tests/test_apollo_client.py-style offline tests.
 """
 
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 from typing import Any
 
 from claude_agent_sdk import tool, create_sdk_mcp_server
 
-from tools.mailbox_tools import CREATE_DRAFT_SCHEMA
+from tools.mailbox_tools import CREATE_DRAFT_SCHEMA, append_drafts_created
 
 
-def build_preview_mailbox_tools(preview_dir: Path, max_drafts_per_run: int) -> list:
+def build_preview_mailbox_tools(
+    run_dir: Path, max_drafts_per_run: int, *, sequence_step: int = 0
+) -> list:
+    preview_dir = run_dir / "drafts_preview"
     preview_dir.mkdir(parents=True, exist_ok=True)
     drafts_created = {"count": 0}
 
@@ -38,6 +46,7 @@ def build_preview_mailbox_tools(preview_dir: Path, max_drafts_per_run: int) -> l
             }
         drafts_created["count"] += 1
         n = drafts_created["count"]
+        tracking_id = str(uuid.uuid4())
         safe_name = args["stakeholder_name"].replace("/", "-").replace(" ", "_")
         preview_path = preview_dir / f"{n:03d}_{safe_name}.md"
         preview_path.write_text(
@@ -48,6 +57,21 @@ def build_preview_mailbox_tools(preview_dir: Path, max_drafts_per_run: int) -> l
             f"**Subject:** {args['subject']}\n\n"
             f"---\n\n{args['body_text']}\n"
         )
+
+        append_drafts_created(run_dir, {
+            "tracking_id": tracking_id,
+            "draft_ref": f"preview-{tracking_id}",
+            "provider": "preview",
+            "thread_id": f"preview-thread-{tracking_id}",
+            "to": args["to"],
+            "subject": args["subject"],
+            "account_id": args.get("account_id"),
+            "account_name": args["account_name"],
+            "stakeholder_id": args.get("stakeholder_id"),
+            "stakeholder_name": args["stakeholder_name"],
+            "sequence_step": sequence_step,
+        })
+
         return {"content": [{
             "type": "text",
             "text": f"[DRY RUN] Preview written to {preview_path}. "
@@ -57,7 +81,7 @@ def build_preview_mailbox_tools(preview_dir: Path, max_drafts_per_run: int) -> l
     return [create_draft]
 
 
-def preview_mailbox_server(preview_dir: Path, max_drafts_per_run: int):
+def preview_mailbox_server(run_dir: Path, max_drafts_per_run: int, *, sequence_step: int = 0):
     return create_sdk_mcp_server(
-        name="mailbox", tools=build_preview_mailbox_tools(preview_dir, max_drafts_per_run)
+        name="mailbox", tools=build_preview_mailbox_tools(run_dir, max_drafts_per_run, sequence_step=sequence_step)
     )

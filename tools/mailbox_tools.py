@@ -6,6 +6,12 @@ which don't even implement a send method for this to wrap.
 max_drafts_per_run is enforced here via a closure-scoped counter, in addition
 to orchestrator.py truncating the stakeholder list before drafting_agent runs
 at all — the same belt-and-suspenders pattern as apollo_tools' credit guard.
+
+Thread continuity (thread_id/in_reply_to) and which sequence step this is
+are Python-supplied closure defaults, NOT agent-facing tool parameters —
+the calling code (orchestrator.py for step 0, advance_sequences.py for
+later steps) always knows exactly which lead/thread it's drafting for, so
+there's no reason to trust the model to echo that back correctly.
 """
 
 from __future__ import annotations
@@ -13,6 +19,7 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
 from claude_agent_sdk import tool, create_sdk_mcp_server
@@ -47,7 +54,23 @@ def _append_audit(deployment: Deployment, entry: dict[str, Any]) -> None:
     deployment.store.write_text(audit_key, json.dumps(existing, indent=2))
 
 
-def build_mailbox_tools(mailbox: MailboxClient, deployment: Deployment, max_drafts_per_run: int) -> list:
+def append_drafts_created(run_dir: Path, entry: dict[str, Any]) -> None:
+    path = run_dir / "drafts_created.json"
+    existing = json.loads(path.read_text()) if path.exists() else []
+    existing.append(entry)
+    path.write_text(json.dumps(existing, indent=2))
+
+
+def build_mailbox_tools(
+    mailbox: MailboxClient,
+    deployment: Deployment,
+    max_drafts_per_run: int,
+    run_dir: Path,
+    *,
+    thread_id: str | None = None,
+    in_reply_to: str | None = None,
+    sequence_step: int = 0,
+) -> list:
     drafts_created = {"count": 0}
 
     @tool(
@@ -69,24 +92,32 @@ def build_mailbox_tools(mailbox: MailboxClient, deployment: Deployment, max_draf
 
         tracking_id = str(uuid.uuid4())
         result = mailbox.create_draft(
-            to=args["to"], subject=args["subject"], body_text=args["body_text"], tracking_id=tracking_id
+            to=args["to"], subject=args["subject"], body_text=args["body_text"], tracking_id=tracking_id,
+            thread_id=thread_id, in_reply_to=in_reply_to,
         )
         drafts_created["count"] += 1
 
-        _append_audit(deployment, {
+        common = {
             "tracking_id": tracking_id,
             "draft_ref": result["draft_ref"],
             "provider": result["provider"],
+            "thread_id": result.get("thread_id"),
             "to": args["to"],
             "subject": args["subject"],
-            "before_text": args["body_text"],
             "account_id": args.get("account_id"),
             "account_name": args["account_name"],
             "stakeholder_id": args.get("stakeholder_id"),
             "stakeholder_name": args["stakeholder_name"],
+            "sequence_step": sequence_step,
+        }
+
+        _append_audit(deployment, {
+            **common,
+            "before_text": args["body_text"],
             "created_at": datetime.now(timezone.utc).isoformat(),
             "status": "open",
         })
+        append_drafts_created(run_dir, common)
 
         return {"content": [{
             "type": "text",
@@ -97,7 +128,20 @@ def build_mailbox_tools(mailbox: MailboxClient, deployment: Deployment, max_draf
     return [create_draft]
 
 
-def mailbox_server(mailbox: MailboxClient, deployment: Deployment, max_drafts_per_run: int):
+def mailbox_server(
+    mailbox: MailboxClient,
+    deployment: Deployment,
+    max_drafts_per_run: int,
+    run_dir: Path,
+    *,
+    thread_id: str | None = None,
+    in_reply_to: str | None = None,
+    sequence_step: int = 0,
+):
     return create_sdk_mcp_server(
-        name="mailbox", tools=build_mailbox_tools(mailbox, deployment, max_drafts_per_run)
+        name="mailbox",
+        tools=build_mailbox_tools(
+            mailbox, deployment, max_drafts_per_run, run_dir,
+            thread_id=thread_id, in_reply_to=in_reply_to, sequence_step=sequence_step,
+        ),
     )

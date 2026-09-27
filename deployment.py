@@ -48,6 +48,19 @@ class LearningConfig:
 
 
 @dataclass
+class SequenceStep:
+    name: str
+    wait_days: int
+    angle: str
+
+
+@dataclass
+class SequenceConfig:
+    steps: list[SequenceStep]
+    recycle_after_days: int = 90
+
+
+@dataclass
 class Deployment:
     deployment_id: str
     mail_provider: str
@@ -59,6 +72,7 @@ class Deployment:
     models: dict[str, str]
     safety: SafetyLimits
     learning: LearningConfig
+    sequence: SequenceConfig
     store: Store
     outlook_client_id: str = ""
     outlook_tenant_id: str = ""
@@ -118,6 +132,7 @@ def load_deployment(deployment_id: str) -> Deployment:
     learning_raw = raw.get("learning", {})
     outlook_raw = raw.get("outlook", {})
     billing_raw = raw.get("billing", {})
+    sequence = _load_sequence(deployment_id)
 
     return Deployment(
         deployment_id=deployment_id,
@@ -140,11 +155,26 @@ def load_deployment(deployment_id: str) -> Deployment:
             stable_draft_settle_hours=learning_raw.get("stable_draft_settle_hours", 6),
             style_notes_token_budget=learning_raw.get("style_notes_token_budget", 4000),
         ),
+        sequence=sequence,
         store=build_store(ROOT),
         outlook_client_id=outlook_raw.get("client_id", ""),
         outlook_tenant_id=outlook_raw.get("tenant_id", ""),
         stripe_subscription_id=billing_raw.get("stripe_subscription_id", ""),
     )
+
+
+def _load_sequence(deployment_id: str) -> SequenceConfig:
+    path = CONFIG_DIR / "sequences" / f"{deployment_id}.yaml"
+    if not path.exists():
+        raise FileNotFoundError(
+            f"No sequence config at {path}. Copy config/sequences/_example.yaml to get started."
+        )
+    raw = yaml.safe_load(path.read_text())
+    steps = [
+        SequenceStep(name=s["name"], wait_days=s["wait_days"], angle=s["angle"].strip())
+        for s in raw["steps"]
+    ]
+    return SequenceConfig(steps=steps, recycle_after_days=raw.get("recycle_after_days", 90))
 
 
 def list_deployments() -> list[str]:

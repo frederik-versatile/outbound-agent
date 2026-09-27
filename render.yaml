@@ -4,7 +4,7 @@
 #
 # Scoped to a single deployment_id (see README "Scope" — this project is
 # built for one client right now). To onboard a second client, duplicate
-# the two cron services below with a different --deployment value and a
+# the three cron services below with a different --deployment value and a
 # new service name; the keyvalue store and its REDIS_URL wiring can be
 # shared across deployments since every key is already namespaced by
 # deployment_id (see store.py / deployment.py's secret_key/state_key).
@@ -59,6 +59,29 @@ services:
     schedule: "0 */4 * * *"   # every 4 hours
     buildCommand: pip install -r requirements.txt
     startCommand: python poll_for_edits.py --deployment acme-corp
+    envVars:
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: outbound-agent-kv
+          property: connectionString
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: STRIPE_API_KEY
+        sync: false
+
+  # Advances leads through the multi-step sequence (config/sequences/<id>.yaml):
+  # reply detection, drafting follow-up/breakup steps, starting/clearing the
+  # recycle cooldown. Runs after outbound-agent-poller in practice (reply-check
+  # timers are multi-day, so exact ordering within a day doesn't matter) but
+  # depends on it logically: a step-0 draft only starts its reply-check timer
+  # once the poller confirms it was actually sent.
+  - type: cron
+    name: outbound-agent-sequencer
+    runtime: python
+    schedule: "30 */4 * * *"   # every 4 hours, offset from the poller
+    buildCommand: pip install -r requirements.txt
+    startCommand: python advance_sequences.py --deployment acme-corp
     envVars:
       - key: REDIS_URL
         fromService:

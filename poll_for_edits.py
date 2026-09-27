@@ -21,6 +21,7 @@ from typing import Any
 
 from claude_agent_sdk import ClaudeAgentOptions, create_sdk_mcp_server, query
 
+import sequencing
 from billing import SubscriptionInactive, require_active_subscription
 from deployment import Deployment, load_deployment
 from clients.mailbox_client import MailboxClient, normalize_for_diff
@@ -77,7 +78,9 @@ async def _invoke_learning_agent(deployment: Deployment, entry: dict[str, Any], 
 
 async def poll_once(deployment: Deployment, dry_run: bool) -> int:
     audit = _load_audit(deployment)
-    mailbox = MailboxClient(deployment)
+    # Built lazily: a fresh deployment with no open drafts yet shouldn't
+    # need working mailbox OAuth just to run this cron job.
+    mailbox = MailboxClient(deployment) if any(e.get("status") == "open" for e in audit) else None
     learned = 0
 
     for entry in audit:
@@ -86,6 +89,14 @@ async def poll_once(deployment: Deployment, dry_run: bool) -> int:
 
         after_text = mailbox.get_finalized_text(entry["tracking_id"], entry["draft_ref"])
         source = "sent"
+
+        if after_text is not None and not dry_run:
+            # Genuinely sent (not the stable-but-still-open signal below) —
+            # this is what starts a sequence lead's reply-check timer, if
+            # this draft is part of one. No-op if it isn't. Gated on
+            # dry_run for the same reason audit status updates are below:
+            # --dry-run previews detection without mutating persistent state.
+            sequencing.mark_sent(deployment, entry["tracking_id"])
 
         if after_text is None and deployment.learning.enable_stable_draft_signal:
             current = mailbox.get_current_draft_text(entry["draft_ref"])

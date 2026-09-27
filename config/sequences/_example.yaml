@@ -1,0 +1,33 @@
+# Copy to <deployment_id>.yaml. Defines the multi-touch cadence a lead moves
+# through: drafting_agent creates step 0 (the cold opener); every step after
+# that is drafted by sequence_agent, in the SAME email thread as step 0, only
+# after the previous step's wait_days has passed with no reply.
+#
+# Reply-only branching for v1 (no open/click tracking — see README "Engagement
+# tracking" for why): each step just waits, checks for a reply, and either
+# stops (replied) or advances to the next step (no reply).
+
+steps:
+  - name: opener
+    wait_days: 4
+    angle: >
+      Cold opener. State the specific ICP/account signal that triggered
+      outreach, the value proposition in the stakeholder's terms, one clear
+      low-friction ask.
+  - name: bump
+    wait_days: 4
+    angle: >
+      Short follow-up in the same thread. Do not re-explain the pitch from
+      scratch — assume they read (or skimmed) the first email. Add ONE new
+      angle or proof point not in the opener. Shorter than the opener.
+  - name: breakup
+    wait_days: 4
+    angle: >
+      Final message in the sequence. Acknowledge the timing may be wrong,
+      make clear this is the last outreach for now, leave the door open. No
+      pressure, no guilt — this should read as genuinely easy to ignore.
+
+# After the last step gets no reply, the lead is suppressed from new outreach
+# until this many days have passed, then becomes eligible for a fresh
+# prioritization/discovery pass (not an automatic resend of old content).
+recycle_after_days: 90

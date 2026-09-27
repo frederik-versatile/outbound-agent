@@ -1,14 +1,52 @@
 # Outbound Agent
 
-Turns a customer's ICP criteria doc into personalized outreach emails,
-**drafted** (never sent) directly in their Gmail or Outlook mailbox, then
-learns from how a human edits those drafts so the next batch is sharper.
+Turns a customer's ICP criteria doc into a multi-step outreach sequence,
+**drafted** (never sent) directly in their Gmail or Outlook mailbox, that
+branches on whether the lead replies, and learns from how a human edits
+drafts so the next batch is sharper.
 
 Pipeline: **prioritize accounts → find stakeholders + verified emails →
-draft emails → (async, later) learn from edits.** Each stage is its own
-Claude Agent SDK call with its own system prompt, tool allowlist, and model —
-see `orchestrator.py`'s module docstring for why stages aren't delegated to
-autonomously by one top-level agent.
+draft the cold opener → (async, days later) check for a reply → draft the
+next step or start a recycle cooldown → (async, separately) learn from
+edits.** Each stage is its own Claude Agent SDK call with its own system
+prompt, tool allowlist, and model — see `orchestrator.py`'s module
+docstring for why stages aren't delegated to autonomously by one top-level
+agent.
+
+### The sequence
+
+```
+config/sequences/<id>.yaml → opener (step 0) → wait N days → replied? ──yes──▶ done
+                                                    │no
+                                                    ▼
+                                              bump (step 1) → wait N days → replied? ──yes──▶ done
+                                                    │no
+                                                    ▼
+                                          breakup (step 2, last) → wait N days → replied? ──yes──▶ done
+                                                    │no
+                                                    ▼
+                                    recycle cooldown (config: recycle_after_days) → eligible again
+```
+
+Every step after the opener lands in the **same email thread** as the step
+before it (`thread_id`/`in_reply_to`), not a fresh cold email. Branching is
+reply-only for v1 — see "Engagement tracking" below for why open/click
+tracking isn't implemented. `sequencing.py` owns the state machine
+(`state/<id>/sequences.json`, one entry per lead) and is what stops the
+pipeline from drafting a fresh opener to the same person every single day:
+`orchestrator.py` suppresses anyone already mid-sequence, already replied,
+or still inside the recycle cooldown before drafting.
+
+#### Engagement tracking
+
+Gmail and Outlook expose no API for "did they open/click this" — there's no
+webhook for it. The only way to get that signal at all is a self-hosted
+tracking pixel + rewritten links, which needs an always-on web service (not
+just cron jobs) and is a genuinely noisy signal in practice (corporate
+security scanners auto-open/click inbound mail while scanning for threats,
+before a human ever sees it). v1 deliberately skips this and branches on
+reply only — `advance_sequences.py` is where that would plug in if it's
+ever added.
 
 ## Setup
 
@@ -24,11 +62,14 @@ cp .env.example .env                  # fill in ANTHROPIC_API_KEY
 cp config/deployments/_example.yaml config/deployments/acme-corp.yaml
 cp config/icp_criteria/_example.md   config/icp_criteria/acme-corp.md
 cp config/positioning/_example.md    config/positioning/acme-corp.md
+cp config/sequences/_example.yaml    config/sequences/acme-corp.yaml
 ```
 
 Edit `acme-corp.yaml`: set `deployment_id: acme-corp` (must match the
 filename), `mail_provider`, safety limits, and `apollo_api_key_env`. Fill in
-the ICP and positioning docs with the customer's real criteria/pitch.
+the ICP and positioning docs with the customer's real criteria/pitch, and
+tune the sequence doc's step wait-times/angles/recycle window if the
+defaults (4 days per step, 90-day recycle) aren't right for this customer.
 
 Add the Apollo key to `.env`:
 
@@ -97,31 +138,50 @@ python poll_for_edits.py --deployment acme-corp             # detect + update st
 customer's sales ops person can open and hand-edit it directly, and the
 drafting stage will pick that up on its next run.
 
+Also flips a sequence lead's entry from `drafted` to `awaiting_reply` once
+it confirms a step was actually sent (see `sequencing.mark_sent`) — this is
+what starts that step's reply-check timer, so `advance_sequences.py` (below)
+depends on this having run first.
+
+### Advancing sequences (run separately, e.g. via cron)
+
+```bash
+python advance_sequences.py --deployment acme-corp --dry-run   # see what it would detect/do
+python advance_sequences.py --deployment acme-corp             # check replies, draft next steps, recycle
+```
+
+For every lead whose reply-check timer has elapsed: checks the thread for a
+reply and stops if found; otherwise drafts the next step in the same
+thread, or starts the recycle cooldown if that was the last step. Also
+flips any lead whose recycle cooldown has elapsed back to `eligible`.
+
 ## Cloud deployment (Render)
 
 This is meant to run unattended: the client never touches it, they only see
 drafts appear in their own inbox, and access is gated by whether their
 subscription is active. `render.yaml` defines the whole thing as one
 Blueprint — a daily cron job for the pipeline, a cron job every 4 hours for
-the learning loop, and a Render Key Value (Redis-compatible) instance that
-holds everything that has to survive between runs (OAuth tokens, the drafts
-audit trail, `style_notes.md`). Render Cron Jobs reset their filesystem on
-every run — that's why this state can't just live on local disk in
-production, and why `store.py` exists.
+the learning loop, a cron job every 4 hours (offset) for advancing
+sequences, and a Render Key Value (Redis-compatible) instance that holds
+everything that has to survive between runs (OAuth tokens, the drafts audit
+trail, `style_notes.md`, `sequences.json`). Render Cron Jobs reset their
+filesystem on every run — that's why this state can't just live on local
+disk in production, and why `store.py` exists.
 
 **Cost**: Render itself is paid once this is live — roughly $10/mo for the
 Key Value instance (the smallest *persistent* tier; Render's free Key Value
 tier explicitly isn't durable across restarts, so it's not used here) plus
-each cron job's $1/mo minimum, prorated up by actual runtime. Verify current
-numbers in the Render dashboard before going live. This is separate from,
-and on top of, whatever the client's own Anthropic/Apollo usage costs.
+each of the three cron jobs' $1/mo minimum, prorated up by actual runtime.
+Verify current numbers in the Render dashboard before going live. This is
+separate from, and on top of, whatever the client's own Anthropic/Apollo
+usage costs.
 
 1. Push this repo to your own private GitHub repo.
 2. In `render.yaml`, replace every `acme-corp` with your real
    `deployment_id`, and `APOLLO_API_KEY_ACME_CORP` with your real env var
    name (matching `apollo_api_key_env` in that deployment's YAML).
 3. In the Render dashboard: **New → Blueprint**, connect the repo. Render
-   reads `render.yaml` and creates all three services.
+   reads `render.yaml` and creates all four services.
 4. Set the `sync: false` env vars in the dashboard (never commit these):
    `ANTHROPIC_API_KEY`, your `APOLLO_API_KEY_...` var, `STRIPE_API_KEY`.
 5. Run the one-time OAuth setup scripts **locally**, with `REDIS_URL` set to
@@ -133,16 +193,17 @@ and on top of, whatever the client's own Anthropic/Apollo usage costs.
    ```
 6. Set `billing.stripe_subscription_id` in `config/deployments/acme-corp.yaml`
    to the subscription id Stripe gives you for that customer's Product/Price,
-   then commit and push — both cron jobs refuse to run without it.
+   then commit and push — all three cron jobs refuse to run without it.
 7. Flip `safety.dry_run_default: false` in that deployment's YAML once
    you're ready for real drafts instead of previews, commit, push.
 
 **Billing**: `billing.py`'s `require_active_subscription()` runs as the very
-first thing both `orchestrator.py` and `poll_for_edits.py` do — it looks up
-the subscription via `STRIPE_API_KEY` and exits before any Apollo or mailbox
-call if the status isn't `active`/`trialing`. So payment lapsing just means
-the cron jobs log a refusal and do nothing — no separate mechanism needed to
-"turn off" a non-paying customer.
+first thing all three entrypoints (`orchestrator.py`, `poll_for_edits.py`,
+`advance_sequences.py`) do — it looks up the subscription via
+`STRIPE_API_KEY` and exits before any Apollo or mailbox call if the status
+isn't `active`/`trialing`. So payment lapsing just means the cron jobs log
+a refusal and do nothing — no separate mechanism needed to "turn off" a
+non-paying customer.
 
 ## Safety
 
@@ -172,25 +233,32 @@ told not to":
 - `learning_agent` (the stage that fires automatically, unattended, on a
   schedule) has zero mailbox-write tools registered — it is structurally
   unable to touch any draft, not just instructed not to.
+- `sequencing.is_suppressed()` is a hard Python-level filter, not agent
+  judgment — the model never decides whether someone's already been
+  contacted; `orchestrator.py` removes them from the list before the
+  drafting stage's prompt is even built.
 - The paywall is enforced the same way: `require_active_subscription()`
-  runs before any paid API call, in code, in both entrypoints — not billed
-  separately from whether the agent is actually running.
+  runs before any paid API call, in code, in all three entrypoints — not
+  billed separately from whether the agent is actually running.
 
 ## Layout
 
 ```
 deployment.py             Resolves --deployment <id> into config/store/env
 store.py                  Durable key/value storage: local files or Render Key Value
-billing.py                Stripe subscription gate, called first by both entrypoints
-orchestrator.py            Live pipeline: prioritize -> discover -> draft
-poll_for_edits.py          Async learning loop (run separately/on a schedule)
+sequencing.py             Per-lead sequence state machine (state/<id>/sequences.json)
+billing.py                Stripe subscription gate, called first by all three entrypoints
+orchestrator.py            Live pipeline: prioritize -> discover -> draft (step 0 only)
+poll_for_edits.py          Async learning loop + confirms sends for sequencing (cron)
+advance_sequences.py       Reply detection, follow-up/breakup drafting, recycling (cron)
 setup_oauth_gmail.py        One-time Gmail OAuth per deployment
 setup_oauth_outlook.py      One-time Outlook OAuth per deployment
 setup_apollo.py             Validates an Apollo API key per deployment
-render.yaml                Cloud deployment blueprint (2 cron jobs + Key Value)
+render.yaml                Cloud deployment blueprint (3 cron jobs + Key Value)
 config/deployments/         One YAML per customer (mail provider, limits, billing id)
 config/icp_criteria/        One ICP doc per customer
 config/positioning/         One positioning/value-prop doc per customer
+config/sequences/           One cadence doc per customer (steps, wait times, recycle window)
 secrets/                    Local-dev-only OAuth token cache (gitignored) — see store.py
 clients/                    Thin API wrappers (Apollo, Gmail, Outlook, facade)
 agents/                     System prompt + tool allowlist per pipeline stage

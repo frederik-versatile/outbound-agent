@@ -184,6 +184,22 @@ reply and stops if found; otherwise drafts the next step in the same
 thread, or starts the recycle cooldown if that was the last step. Also
 flips any lead whose recycle cooldown has elapsed back to `eligible`.
 
+### Dashboard
+
+```bash
+DASHBOARD_USERNAME=admin DASHBOARD_PASSWORD=yourpassword python dashboard.py --deployment acme-corp
+```
+
+Then visit `http://127.0.0.1:5000` (basic-auth prompt, use the credentials
+above). Shows sends, replies, reply rate, and who was emailed — computed
+from `drafts_audit.json` and `sequences.json`, the same data every other
+part of this project already writes; the dashboard is a read-only view, not
+a new data source. "Sends" only counts drafts `poll_for_edits.py` has
+confirmed were actually sent — a draft still sitting untouched in Gmail/
+Outlook doesn't count, by design (see `dashboard.py`'s `SENT_STATUSES`).
+Fails closed on auth: if `DASHBOARD_USERNAME`/`DASHBOARD_PASSWORD` aren't
+set, every request gets a 401, never an open page.
+
 ## Cloud deployment (Render)
 
 This is meant to run unattended: the client never touches it, they only see
@@ -191,28 +207,35 @@ drafts appear in their own inbox, and access is gated by whether their
 subscription is active. `render.yaml` defines the whole thing as one
 Blueprint — a daily cron job for the pipeline, a cron job every 4 hours for
 the learning loop, a cron job every 4 hours (offset) for advancing
-sequences, and a Render Key Value (Redis-compatible) instance that holds
-everything that has to survive between runs (OAuth tokens, the drafts audit
-trail, `style_notes.md`, `sequences.json`). Render Cron Jobs reset their
-filesystem on every run — that's why this state can't just live on local
-disk in production, and why `store.py` exists.
+sequences, a free web service for the dashboard, and a Render Key Value
+(Redis-compatible) instance that holds everything that has to survive
+between runs (OAuth tokens, the drafts audit trail, `style_notes.md`,
+`sequences.json`). Render Cron Jobs reset their filesystem on every run —
+that's why this state can't just live on local disk in production, and why
+`store.py` exists.
 
 **Cost**: Render itself is paid once this is live — roughly $10/mo for the
 Key Value instance (the smallest *persistent* tier; Render's free Key Value
 tier explicitly isn't durable across restarts, so it's not used here) plus
 each of the three cron jobs' $1/mo minimum, prorated up by actual runtime.
+The dashboard runs on Render's free Web Service tier (confirmed it can
+reach the Key Value store over Render's private network even on free —
+free services can send private-network requests, just not receive them),
+so it adds no cost beyond the ~1 minute cold start after 15 minutes idle.
 Verify current numbers in the Render dashboard before going live. This is
 separate from, and on top of, whatever the client's own Anthropic/Apollo
 usage costs.
 
 1. Push this repo to your own private GitHub repo.
 2. In `render.yaml`, replace every `acme-corp` with your real
-   `deployment_id`, and `APOLLO_API_KEY_ACME_CORP` with your real env var
-   name (matching `apollo_api_key_env` in that deployment's YAML).
+   `deployment_id` (including `DEPLOYMENT_ID` on the dashboard service),
+   and `APOLLO_API_KEY_ACME_CORP` with your real env var name (matching
+   `apollo_api_key_env` in that deployment's YAML).
 3. In the Render dashboard: **New → Blueprint**, connect the repo. Render
-   reads `render.yaml` and creates all four services.
+   reads `render.yaml` and creates all five services.
 4. Set the `sync: false` env vars in the dashboard (never commit these):
-   `ANTHROPIC_API_KEY`, your `APOLLO_API_KEY_...` var, `STRIPE_API_KEY`.
+   `ANTHROPIC_API_KEY`, your `APOLLO_API_KEY_...` var, `STRIPE_API_KEY`,
+   `DASHBOARD_USERNAME`, `DASHBOARD_PASSWORD`.
 5. Run the one-time OAuth setup scripts **locally**, with `REDIS_URL` set to
    the connection string Render shows for the `outbound-agent-kv` service
    (Render → that service → Connect), so the tokens land in the same store
@@ -280,11 +303,12 @@ billing.py                Stripe subscription gate, called first by all three en
 orchestrator.py            Live pipeline: prioritize -> discover -> draft (step 0 only)
 poll_for_edits.py          Async learning loop + confirms sends for sequencing (cron)
 advance_sequences.py       Reply detection, follow-up/breakup drafting, recycling (cron)
+dashboard.py               Read-only sends/replies/reply-rate view (Flask, basic-auth, web service)
 setup_oauth_gmail.py        One-time Gmail OAuth per deployment
 setup_oauth_outlook.py      One-time Outlook OAuth per deployment
 setup_apollo.py             Validates an Apollo API key per deployment
 setup_google_sheets.py      One-time Sheets service-account setup (optional, hire-sheet only)
-render.yaml                Cloud deployment blueprint (3 cron jobs + Key Value)
+render.yaml                Cloud deployment blueprint (3 cron jobs + dashboard web service + Key Value)
 config/deployments/         One YAML per customer (mail provider, limits, billing id, hire sheet)
 config/icp_criteria/        One ICP doc per customer
 config/positioning/         One positioning/value-prop doc per customer

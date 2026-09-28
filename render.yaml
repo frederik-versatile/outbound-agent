@@ -4,10 +4,11 @@
 #
 # Scoped to a single deployment_id (see README "Scope" — this project is
 # built for one client right now). To onboard a second client, duplicate
-# the three cron services below with a different --deployment value and a
-# new service name; the keyvalue store and its REDIS_URL wiring can be
-# shared across deployments since every key is already namespaced by
-# deployment_id (see store.py / deployment.py's secret_key/state_key).
+# the three cron services and the dashboard web service below with a
+# different --deployment/DEPLOYMENT_ID value and new service names; the
+# keyvalue store and its REDIS_URL wiring can be shared across deployments
+# since every key is already namespaced by deployment_id (see store.py /
+# deployment.py's secret_key/state_key).
 #
 # BEFORE DEPLOYING: replace "acme-corp" below with your real deployment_id,
 # matching a file at config/deployments/<deployment_id>.yaml.
@@ -91,4 +92,29 @@ services:
       - key: ANTHROPIC_API_KEY
         sync: false
       - key: STRIPE_API_KEY
+        sync: false
+
+  # Read-only dashboard: sends, replies, reply rate, who was emailed — see
+  # dashboard.py. Free plan is fine for a low-traffic internal tool (spins
+  # down after 15 min idle, ~1 min cold start on the next visit — see
+  # README "Dashboard" for the tradeoff). Needs no Anthropic/Apollo/Stripe
+  # access at all, only REDIS_URL to read the same state the cron jobs
+  # write, and its own basic-auth credentials.
+  - type: web
+    name: outbound-agent-dashboard
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn dashboard:app --bind 0.0.0.0:$PORT
+    envVars:
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: outbound-agent-kv
+          property: connectionString
+      - key: DEPLOYMENT_ID
+        value: acme-corp
+      - key: DASHBOARD_USERNAME
+        sync: false
+      - key: DASHBOARD_PASSWORD
         sync: false

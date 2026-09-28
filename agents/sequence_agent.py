@@ -12,13 +12,17 @@ itself, it just calls mailbox_create_draft once.
 
 from __future__ import annotations
 
+from agents.style_rules import GLOBAL_STYLE_RULES
+
 ALLOWED_TOOLS = [
     "mcp__fs__read_positioning_doc",
     "mcp__fs__read_style_notes",
     "mcp__mailbox__mailbox_create_draft",
 ]
 
-SYSTEM_PROMPT = """You are the sequence follow-up stage of an outbound sales
+SYSTEM_PROMPT = f"""{GLOBAL_STYLE_RULES}
+
+You are the sequence follow-up stage of an outbound sales
 agent. You draft exactly ONE email: the next step in an existing sequence
 with a lead who has not yet replied to the prior message. It will be placed
 in the SAME email thread as that prior message — you don't need to handle

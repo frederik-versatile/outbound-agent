@@ -79,7 +79,7 @@ class ApolloClient:
         if credits:
             self._charge(credits)
         if self.mode == "fixture":
-            return self._load_fixture(path)
+            return self._load_fixture(path, params)
         resp = requests.get(
             f"{APOLLO_HOST}{path}",
             headers={"x-api-key": self.api_key},
@@ -89,10 +89,24 @@ class ApolloClient:
         resp.raise_for_status()
         return resp.json()
 
-    def _load_fixture(self, path: str) -> dict[str, Any]:
+    def _load_fixture(self, path: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         collapsed = _ID_SEGMENT.sub("/id", path)
-        name = collapsed.strip("/").replace("/", "_") + ".json"
-        fixture_path = (self.fixtures_dir or Path(__file__).parent.parent / "tests" / "fixtures") / name
+        base_name = collapsed.strip("/").replace("/", "_")
+        fixtures_dir = self.fixtures_dir or Path(__file__).parent.parent / "tests" / "fixtures"
+
+        # For GET requests keyed by a query param (e.g. enrich by domain),
+        # prefer a param-specific fixture if one exists — e.g.
+        # api_v1_organizations_enrich__domain=acme.com.json — so different
+        # inputs can get different fixture responses, falling back to the
+        # plain path-only file (the only kind that existed before this)
+        # so nothing that already relies on that file breaks.
+        if params:
+            for key, value in params.items():
+                specific = fixtures_dir / f"{base_name}__{key}={value}.json"
+                if specific.exists():
+                    return json.loads(specific.read_text())
+
+        fixture_path = fixtures_dir / f"{base_name}.json"
         if not fixture_path.exists():
             raise FileNotFoundError(f"No fixture at {fixture_path} for Apollo path {path}")
         return json.loads(fixture_path.read_text())

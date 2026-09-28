@@ -255,6 +255,7 @@ async def main_async(args: argparse.Namespace) -> None:
         api_key=deployment.apollo_api_key if not args.use_fixtures else "fixture-mode",
         max_credits_per_run=deployment.safety.max_total_enrich_calls_per_run,
         mode="fixture" if args.use_fixtures else "live",
+        fixtures_dir=Path(args.fixtures_dir) if args.fixtures_dir else None,
     )
 
     start_stage = args.resume_from or "prioritization"
@@ -288,6 +289,11 @@ def main() -> None:
     run_p.add_argument("--dry-run", action="store_true", help="Force dry run even if config default is live")
     run_p.add_argument("--live", action="store_true", help="Force live mailbox writes even if config default is dry-run")
     run_p.add_argument("--use-fixtures", action="store_true", help="Replay recorded Apollo fixtures, zero live API calls")
+    run_p.add_argument(
+        "--fixtures-dir", default=None,
+        help="Directory of Apollo fixture JSON files to replay, overriding the default tests/fixtures/. "
+             "Only meaningful with --use-fixtures.",
+    )
     run_p.add_argument("--resume-from", choices=STAGES, default=None)
     run_p.add_argument("--run-id", default=None, help="Required when using --resume-from")
     run_p.add_argument(

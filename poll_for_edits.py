@@ -97,6 +97,7 @@ async def poll_once(deployment: Deployment, dry_run: bool) -> int:
             # dry_run for the same reason audit status updates are below:
             # --dry-run previews detection without mutating persistent state.
             sequencing.mark_sent(deployment, entry["tracking_id"])
+            entry["sent_at"] = datetime.now(timezone.utc).isoformat()  # dashboard.py reads this
 
         if after_text is None and deployment.learning.enable_stable_draft_signal:
             current = mailbox.get_current_draft_text(entry["draft_ref"])

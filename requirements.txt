@@ -8,3 +8,5 @@ google-auth-oauthlib>=1.2.0
 msal>=1.28.0
 redis>=5.0.0
 stripe>=11.0.0
+flask>=3.0.0
+gunicorn>=22.0.0

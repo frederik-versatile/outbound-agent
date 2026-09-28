@@ -24,6 +24,7 @@ from typing import Any
 
 from claude_agent_sdk import tool, create_sdk_mcp_server
 
+from agents.style_rules import EM_DASH
 from clients.mailbox_client import MailboxClient
 from deployment import Deployment
 
@@ -44,6 +45,21 @@ CREATE_DRAFT_SCHEMA = {
 
 class DraftLimitExceeded(RuntimeError):
     pass
+
+
+def em_dash_error(subject: str, body_text: str) -> str | None:
+    """Global rule, enforced here so a missed instruction can't quietly
+    slip through as a live draft — see agents/style_rules.py. Returns an
+    error message for the tool to surface if either field contains an
+    em-dash, else None."""
+    if EM_DASH in subject or EM_DASH in body_text:
+        return (
+            f"ERROR: subject or body_text contains an em-dash ({EM_DASH}), which is never "
+            f"allowed (see the global rules in your system prompt). Rewrite the sentence "
+            f"without it — usually as two sentences or with a comma — and call "
+            f"mailbox_create_draft again."
+        )
+    return None
 
 
 def _append_audit(deployment: Deployment, entry: dict[str, Any]) -> None:
@@ -89,6 +105,10 @@ def build_mailbox_tools(
                 }],
                 "is_error": True,
             }
+
+        error = em_dash_error(args["subject"], args["body_text"])
+        if error:
+            return {"content": [{"type": "text", "text": error}], "is_error": True}
 
         tracking_id = str(uuid.uuid4())
         result = mailbox.create_draft(

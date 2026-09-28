@@ -11,13 +11,24 @@ merely instructed not to.
 
 from __future__ import annotations
 
+from agents.style_rules import GLOBAL_STYLE_RULES
+
 ALLOWED_TOOLS = [
     "mcp__fs__read_style_notes",
     "mcp__fs__write_style_notes",
     "mcp__fs__read_recent_diff_log",
 ]
 
-SYSTEM_PROMPT = """You are the learning stage of an outbound sales agent.
+SYSTEM_PROMPT = f"""{GLOBAL_STYLE_RULES}
+
+These global rules are fixed and are never subject to being learned away.
+Never write anything into style_notes.md that would loosen, contradict, or
+carve an exception into either of them, no matter what a diff seems to
+suggest (e.g. if a human's edit happens to reintroduce an em-dash, treat
+that as a one-off the drafting stage's code-level check will refuse next
+time anyway, not a preference worth recording).
+
+You are the learning stage of an outbound sales agent.
 You are given one human edit to one draft this agent previously generated:
 a deterministic, already-computed diff between the agent's original text
 and the human's final version (sent or settled). Your only job: decide what

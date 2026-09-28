@@ -19,7 +19,7 @@ from typing import Any
 
 from claude_agent_sdk import tool, create_sdk_mcp_server
 
-from tools.mailbox_tools import CREATE_DRAFT_SCHEMA, append_drafts_created
+from tools.mailbox_tools import CREATE_DRAFT_SCHEMA, append_drafts_created, em_dash_error
 
 
 def build_preview_mailbox_tools(
@@ -44,6 +44,10 @@ def build_preview_mailbox_tools(
                 }],
                 "is_error": True,
             }
+        error = em_dash_error(args["subject"], args["body_text"])
+        if error:
+            return {"content": [{"type": "text", "text": error}], "is_error": True}
+
         drafts_created["count"] += 1
         n = drafts_created["count"]
         tracking_id = str(uuid.uuid4())

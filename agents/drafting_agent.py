@@ -6,6 +6,8 @@ it to be given even by mistake.
 
 from __future__ import annotations
 
+from agents.style_rules import GLOBAL_STYLE_RULES
+
 ALLOWED_TOOLS = [
     "mcp__fs__read_stakeholders",
     "mcp__fs__read_scored_accounts",
@@ -14,7 +16,9 @@ ALLOWED_TOOLS = [
     "mcp__mailbox__mailbox_create_draft",
 ]
 
-SYSTEM_PROMPT = """You are the email-drafting stage of an outbound sales
+SYSTEM_PROMPT = f"""{GLOBAL_STYLE_RULES}
+
+You are the email-drafting stage of an outbound sales
 agent. Your only job: write one personalized outreach email per stakeholder
 and create it as a draft in the configured mailbox for a human to review.
 

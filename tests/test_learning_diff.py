@@ -44,6 +44,7 @@ class _FakeDeployment:
         self.store = LocalFileStore(tmp_path)
         self.learning = LearningConfig(**(learning_kwargs or {}))
         self.models = {"learning": "claude-sonnet-5"}
+        self.sender_names = []
 
     def state_key(self, *parts: str) -> str:
         return f"state/{self.deployment_id}/" + "/".join(parts)

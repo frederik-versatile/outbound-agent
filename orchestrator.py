@@ -30,6 +30,7 @@ from deployment import Deployment, load_deployment
 from clients.apollo_client import ApolloClient
 from clients.mailbox_client import MailboxClient
 from clients.sheets_client import SheetsClient
+from contacts import ContactVault
 from tools.fs_tools import (
     build_prioritization_fs_tools,
     build_discovery_fs_tools,
@@ -119,14 +120,15 @@ def cross_reference_hire_sheet(deployment: Deployment, accounts: list[dict[str, 
     return accounts
 
 
-async def run_prioritization(deployment: Deployment, run_dir: Path, apollo: ApolloClient, log) -> list[dict[str, Any]]:
+async def run_prioritization(deployment: Deployment, run_dir: Path, apollo: ApolloClient, log,
+                             vault: ContactVault | None = None) -> list[dict[str, Any]]:
     options = ClaudeAgentOptions(
         tools=[],  # disable ALL built-in tools (Bash, Read, Write, WebFetch, ...) — see module docstring
         system_prompt=prioritization_agent.SYSTEM_PROMPT,
         allowed_tools=prioritization_agent.ALLOWED_TOOLS,
         mcp_servers={
             "fs": create_sdk_mcp_server(name="fs", tools=build_prioritization_fs_tools(deployment, run_dir)),
-            "apollo": apollo_server(apollo),
+            "apollo": apollo_server(apollo, vault),
         },
         permission_mode="bypassPermissions",
         model=deployment.models.get("prioritization"),
@@ -155,14 +157,16 @@ async def run_prioritization(deployment: Deployment, run_dir: Path, apollo: Apol
     return accounts
 
 
-async def run_discovery(deployment: Deployment, run_dir: Path, apollo: ApolloClient, log) -> list[dict[str, Any]]:
+async def run_discovery(deployment: Deployment, run_dir: Path, apollo: ApolloClient, log,
+                        vault: ContactVault | None = None) -> list[dict[str, Any]]:
+    vault = vault or ContactVault(deployment)
     options = ClaudeAgentOptions(
         tools=[],  # disable ALL built-in tools — this stage gets only its MCP allowlist
         system_prompt=discovery_agent.SYSTEM_PROMPT,
         allowed_tools=discovery_agent.ALLOWED_TOOLS,
         mcp_servers={
-            "fs": create_sdk_mcp_server(name="fs", tools=build_discovery_fs_tools(deployment, run_dir)),
-            "apollo": apollo_server(apollo),
+            "fs": create_sdk_mcp_server(name="fs", tools=build_discovery_fs_tools(deployment, run_dir, vault)),
+            "apollo": apollo_server(apollo, vault),
         },
         permission_mode="bypassPermissions",
         model=deployment.models.get("discovery"),
@@ -195,7 +199,8 @@ async def run_discovery(deployment: Deployment, run_dir: Path, apollo: ApolloCli
     # cold opener to the SAME person every time it runs. See sequencing.py.
     sequence_entries = sequencing.load_sequences(deployment)
     before_suppression = len(capped)
-    capped = [s for s in capped if not sequencing.is_suppressed(sequence_entries, s.get("email", ""))]
+    capped = [s for s in capped
+              if not sequencing.is_suppressed(sequence_entries, vault.email(s.get("person_id")))]
     suppressed_count = before_suppression - len(capped)
 
     result_path.write_text(json.dumps(capped, indent=2))
@@ -206,13 +211,17 @@ async def run_discovery(deployment: Deployment, run_dir: Path, apollo: ApolloCli
 
 
 async def run_drafting(
-    deployment: Deployment, run_dir: Path, dry_run: bool, mailbox_override: str | None, log
+    deployment: Deployment, run_dir: Path, dry_run: bool, mailbox_override: str | None, log,
+    vault: ContactVault | None = None,
 ) -> None:
+    vault = vault or ContactVault(deployment)
     if dry_run:
-        mcp_mailbox = preview_mailbox_server(run_dir, deployment.safety.max_drafts_per_run, sequence_step=0)
+        mcp_mailbox = preview_mailbox_server(run_dir, deployment.safety.max_drafts_per_run, sequence_step=0,
+                                             vault=vault)
     else:
         mailbox = MailboxClient(deployment, provider_override=mailbox_override)
-        mcp_mailbox = mailbox_server(mailbox, deployment, deployment.safety.max_drafts_per_run, run_dir, sequence_step=0)
+        mcp_mailbox = mailbox_server(mailbox, deployment, deployment.safety.max_drafts_per_run, run_dir,
+                                     sequence_step=0, vault=vault)
 
     options = ClaudeAgentOptions(
         tools=[],  # disable ALL built-in tools — mailbox_create_draft is its only write capability
@@ -258,6 +267,8 @@ async def main_async(args: argparse.Namespace) -> None:
         fixtures_dir=Path(args.fixtures_dir) if args.fixtures_dir else None,
     )
 
+    vault = ContactVault(deployment)  # code-only names/emails; agents get person_ids (no-PII rule)
+
     start_stage = args.resume_from or "prioritization"
     stage_index = STAGES.index(start_stage)
 
@@ -265,15 +276,15 @@ async def main_async(args: argparse.Namespace) -> None:
           f"dry_run={dry_run} stages={STAGES[stage_index:]}")
 
     if stage_index <= STAGES.index("prioritization"):
-        accounts = await run_prioritization(deployment, run_dir, apollo, log)
+        accounts = await run_prioritization(deployment, run_dir, apollo, log, vault)
         print(f"[outbound-agent] prioritization: {len(accounts)} accounts")
 
     if stage_index <= STAGES.index("discovery"):
-        stakeholders = await run_discovery(deployment, run_dir, apollo, log)
+        stakeholders = await run_discovery(deployment, run_dir, apollo, log, vault)
         print(f"[outbound-agent] discovery: {len(stakeholders)} stakeholders")
 
     if stage_index <= STAGES.index("drafting"):
-        await run_drafting(deployment, run_dir, dry_run, args.mailbox_override, log)
+        await run_drafting(deployment, run_dir, dry_run, args.mailbox_override, log, vault)
         print(f"[outbound-agent] drafting: done. "
               f"{'Preview files in ' + str(run_dir / 'drafts_preview') if dry_run else 'Drafts created in mailbox.'}")
 

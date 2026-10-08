@@ -2,6 +2,10 @@
 prioritization_agent and discovery_agent can call Apollo without either
 having direct API access — every call still passes through ApolloClient's
 own credit-limit guard regardless of what either agent's prompt says.
+
+No-PII rule: people results never reach the agent as-is. Names and emails go into the code-only
+ContactVault (contacts.py); the agent gets person_id + title/seniority/organization + email_status.
+Enrichment is by person_id only. Every tool result also passes through pii.scrub as a backstop.
 """
 
 from __future__ import annotations
@@ -12,6 +16,8 @@ from typing import Any
 from claude_agent_sdk import tool, create_sdk_mcp_server
 
 from clients.apollo_client import ApolloClient, ApolloCreditLimitExceeded
+from contacts import ContactVault
+from pii import scrub
 
 _ORG_SEARCH_SCHEMA = {
     "type": "object",
@@ -42,22 +48,22 @@ _PEOPLE_SEARCH_SCHEMA = {
 
 _ENRICH_SCHEMA = {
     "type": "object",
-    "properties": {
-        "person_id": {"type": "string"},
-        "first_name": {"type": "string"},
-        "last_name": {"type": "string"},
-        "organization_domain": {"type": "string"},
-    },
+    "properties": {"person_id": {"type": "string"}},
+    "required": ["person_id"],
 }
 
 _BULK_ENRICH_SCHEMA = {
     "type": "object",
-    "properties": {"people": {"type": "array", "items": {"type": "object"}}},
-    "required": ["people"],
+    "properties": {"person_ids": {"type": "array", "items": {"type": "string"}, "maxItems": 10}},
+    "required": ["person_ids"],
 }
 
 
-def build_apollo_tools(client: ApolloClient) -> list:
+def _text(data: Any) -> dict[str, Any]:
+    return {"content": [{"type": "text", "text": json.dumps(scrub(data))}]}
+
+
+def build_apollo_tools(client: ApolloClient, vault: ContactVault | None = None) -> list:
     @tool("apollo_search_organizations", "Search Apollo for organizations matching ICP filters.", _ORG_SEARCH_SCHEMA)
     async def search_organizations(args: dict[str, Any]) -> dict[str, Any]:
         employee_range = tuple(args["employee_range"]) if args.get("employee_range") else None
@@ -68,7 +74,7 @@ def build_apollo_tools(client: ApolloClient) -> list:
             technologies=args.get("technologies"),
             page=args.get("page", 1),
         )
-        return {"content": [{"type": "text", "text": json.dumps(result)}]}
+        return _text(result)
 
     @tool(
         "apollo_enrich_organization",
@@ -78,9 +84,22 @@ def build_apollo_tools(client: ApolloClient) -> list:
     )
     async def enrich_organization(args: dict[str, Any]) -> dict[str, Any]:
         result = client.enrich_organization(args["domain"])
-        return {"content": [{"type": "text", "text": json.dumps(result)}]}
+        return _text(result)
 
-    @tool("apollo_search_people", "Find people at target orgs matching title/seniority filters.", _PEOPLE_SEARCH_SCHEMA)
+    def _safe_people(people: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        out = []
+        for person in people or []:
+            if vault is not None:
+                vault.remember(person)
+            out.append(ContactVault.safe_view(person))
+        return out
+
+    @tool(
+        "apollo_search_people",
+        "Find people at target orgs matching title/seniority filters. Returns person_id, title, "
+        "seniority and organization only (names and emails are never shown to you).",
+        _PEOPLE_SEARCH_SCHEMA,
+    )
     async def search_people(args: dict[str, Any]) -> dict[str, Any]:
         result = client.search_people(
             organization_ids=args["organization_ids"],
@@ -88,41 +107,39 @@ def build_apollo_tools(client: ApolloClient) -> list:
             seniorities=args.get("seniorities"),
             page=args.get("page", 1),
         )
-        return {"content": [{"type": "text", "text": json.dumps(result)}]}
+        return _text({"people": _safe_people(result.get("people", [])), "pagination": result.get("pagination")})
 
     @tool(
         "apollo_enrich_person",
-        "Resolve a verified work email for one person. Consumes 1 Apollo credit; "
+        "Resolve a verified work email for one person by person_id. Returns email_status and "
+        "has_email (the address itself is kept by the code). Consumes 1 Apollo credit; "
         "refuses with an error if the run's credit cap would be exceeded.",
         _ENRICH_SCHEMA,
     )
     async def enrich_person(args: dict[str, Any]) -> dict[str, Any]:
         try:
-            result = client.enrich_person(
-                person_id=args.get("person_id"),
-                first_name=args.get("first_name"),
-                last_name=args.get("last_name"),
-                organization_domain=args.get("organization_domain"),
-            )
+            result = client.enrich_person(person_id=args["person_id"])
         except ApolloCreditLimitExceeded as exc:
             return {"content": [{"type": "text", "text": f"ERROR: {exc}"}], "is_error": True}
-        return {"content": [{"type": "text", "text": json.dumps(result)}]}
+        person = result.get("person") or {}
+        return _text({"person": (_safe_people([person]) or [{}])[0]})
 
     @tool(
         "apollo_bulk_enrich_people",
-        "Batch-resolve verified work emails for up to 10 people at once (preferred over repeated "
-        "apollo_enrich_person calls). Consumes 1 credit per person; refuses if the run's cap would be exceeded.",
+        "Batch-resolve verified work emails for up to 10 person_ids at once (preferred over repeated "
+        "apollo_enrich_person calls). Returns email_status/has_email per person_id. Consumes 1 credit "
+        "per person; refuses if the run's cap would be exceeded.",
         _BULK_ENRICH_SCHEMA,
     )
     async def bulk_enrich_people(args: dict[str, Any]) -> dict[str, Any]:
         try:
-            result = client.bulk_enrich_people(args["people"])
+            result = client.bulk_enrich_people([{"id": pid} for pid in args["person_ids"]])
         except ApolloCreditLimitExceeded as exc:
             return {"content": [{"type": "text", "text": f"ERROR: {exc}"}], "is_error": True}
-        return {"content": [{"type": "text", "text": json.dumps(result)}]}
+        return _text({"matches": _safe_people(result.get("matches", []))})
 
     return [search_organizations, enrich_organization, search_people, enrich_person, bulk_enrich_people]
 
 
-def apollo_server(client: ApolloClient):
-    return create_sdk_mcp_server(name="apollo", tools=build_apollo_tools(client))
+def apollo_server(client: ApolloClient, vault: ContactVault | None = None):
+    return create_sdk_mcp_server(name="apollo", tools=build_apollo_tools(client, vault))

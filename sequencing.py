@@ -61,8 +61,10 @@ def seed_step_zero(deployment: Deployment, drafts_created: list[dict[str, Any]])
     for draft in drafts_created:
         entries.append({
             "lead_key": draft["to"].lower(),
+            "person_id": draft.get("stakeholder_id"),
+            "title": draft.get("stakeholder_title", ""),
             "account_name": draft["account_name"],
-            "stakeholder_name": draft["stakeholder_name"],
+            "stakeholder_name": draft.get("stakeholder_name", ""),  # code-only (dashboard)
             "thread_id": draft["thread_id"],
             "subject": draft.get("subject"),
             "step": 0,

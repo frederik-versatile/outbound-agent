@@ -1,6 +1,6 @@
-# Copy this file to <deployment_id>.yaml (e.g. acme-corp.yaml) to onboard a new
-# customer. deployment_id must match the filename (without .yaml) and is passed
-# on the command line as --deployment <deployment_id>.
+# Copy this file to Agents/Clients/<Client>/outbound/outbound.yaml to onboard a new customer
+# (see README). deployment_id is passed on the command line as --deployment <deployment_id> and
+# must be registered on the client with new_client.py --outbound <deployment_id>.
 
 deployment_id: example
 
@@ -20,8 +20,13 @@ outlook:
 billing:
   stripe_subscription_id: ""
 
-# Name of the .env variable holding this customer's Apollo API key.
+# Apollo key: stored per client in the macOS Keychain by setup_apollo.py. This env var name is only
+# used where there is no Keychain (cloud deploys).
 apollo_api_key_env: APOLLO_API_KEY_EXAMPLE
+
+# Names that sign this customer's emails. Replaced with {{sender_name}} before the learning stage
+# sees a human edit (no-PII rule).
+sender_names: []
 
 # Optional: cross-references Apollo-sourced accounts against a customer's
 # own tracked buying-signal sheet (e.g. "companies currently hiring a
@@ -40,8 +45,8 @@ hire_sheet:
   score_boost: 15
 
 # Docs this deployment reads from.
-icp_doc: config/icp_criteria/example.md
-positioning_doc: config/positioning/example.md
+icp_doc: icp.md
+positioning_doc: positioning.md
 
 # Target buyer titles/seniorities the discovery stage searches for, in addition
 # to whatever the ICP doc itself specifies.

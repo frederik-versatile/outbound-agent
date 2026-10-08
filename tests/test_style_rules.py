@@ -21,8 +21,8 @@ def test_em_dash_error_detects_in_body():
 
 def _args(**overrides):
     base = {
-        "to": "jordan.reyes@acme.example.com", "subject": "Clean subject", "body_text": "Clean body.",
-        "account_name": "Acme Robotics", "stakeholder_name": "Jordan Reyes",
+        "stakeholder_id": "p1", "subject": "Clean subject", "body_text": "Hi {{first_name}}, clean body.",
+        "account_name": "Acme Robotics",
     }
     base.update(overrides)
     return base
@@ -38,10 +38,19 @@ class _FakeDeployment:
         return f"state/{self.deployment_id}/" + "/".join(parts)
 
 
+def _vault(tmp_path):
+    from contacts import ContactVault
+    vault = ContactVault(_FakeDeployment(tmp_path))
+    vault.remember({"id": "p1", "first_name": "Jordan", "last_name": "Reyes",
+                    "email": "jordan.reyes@acme.example.com", "email_status": "verified", "title": "VP Sales"})
+    return vault
+
+
 def test_live_mailbox_tool_rejects_em_dash_and_never_calls_mailbox(tmp_path):
     deployment = _FakeDeployment(tmp_path)
     fake_mailbox = MagicMock()
-    tools = build_mailbox_tools(fake_mailbox, deployment, max_drafts_per_run=5, run_dir=tmp_path)
+    tools = build_mailbox_tools(fake_mailbox, deployment, max_drafts_per_run=5, run_dir=tmp_path,
+                                vault=_vault(tmp_path))
     create_draft = tools[0]
 
     result = asyncio.run(create_draft.handler(_args(body_text=f"Great fit{EM_DASH}let's talk.")))
@@ -56,7 +65,8 @@ def test_live_mailbox_tool_accepts_clean_copy(tmp_path):
     deployment = _FakeDeployment(tmp_path)
     fake_mailbox = MagicMock()
     fake_mailbox.create_draft.return_value = {"draft_ref": "d1", "provider": "gmail", "thread_id": "t1"}
-    tools = build_mailbox_tools(fake_mailbox, deployment, max_drafts_per_run=5, run_dir=tmp_path)
+    tools = build_mailbox_tools(fake_mailbox, deployment, max_drafts_per_run=5, run_dir=tmp_path,
+                                vault=_vault(tmp_path))
     create_draft = tools[0]
 
     result = asyncio.run(create_draft.handler(_args()))
@@ -66,7 +76,7 @@ def test_live_mailbox_tool_accepts_clean_copy(tmp_path):
 
 
 def test_preview_mailbox_tool_rejects_em_dash(tmp_path):
-    tools = build_preview_mailbox_tools(tmp_path, max_drafts_per_run=5)
+    tools = build_preview_mailbox_tools(tmp_path, max_drafts_per_run=5, vault=_vault(tmp_path))
     create_draft = tools[0]
 
     result = asyncio.run(create_draft.handler(_args(subject=f"Quick question{EM_DASH}got a sec?")))
@@ -77,7 +87,7 @@ def test_preview_mailbox_tool_rejects_em_dash(tmp_path):
 
 
 def test_preview_mailbox_tool_accepts_clean_copy(tmp_path):
-    tools = build_preview_mailbox_tools(tmp_path, max_drafts_per_run=5)
+    tools = build_preview_mailbox_tools(tmp_path, max_drafts_per_run=5, vault=_vault(tmp_path))
     create_draft = tools[0]
 
     result = asyncio.run(create_draft.handler(_args()))

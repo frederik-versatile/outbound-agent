@@ -12,7 +12,12 @@ from typing import Any
 
 from claude_agent_sdk import tool
 
+from contacts import ContactVault
 from deployment import Deployment
+from pii import scrub
+
+# What a stakeholder record may contain when it is handed between stages (no names, no emails).
+STAKEHOLDER_FIELDS = ("person_id", "account_org_id", "account_name", "title", "seniority", "email_status")
 
 
 def _write_json(path: Path, data: Any) -> None:
@@ -44,21 +49,38 @@ def build_prioritization_fs_tools(deployment: Deployment, run_dir: Path) -> list
     return [read_icp_doc, write_scored_accounts]
 
 
-def build_discovery_fs_tools(deployment: Deployment, run_dir: Path) -> list:
+def clean_stakeholders(stakeholders: list[dict[str, Any]], vault: ContactVault | None) -> list[dict[str, Any]]:
+    """Keep only non-personal fields, and only people the code holds a verified email for."""
+    cleaned = []
+    for s in stakeholders or []:
+        pid = str(s.get("person_id") or "")
+        if not pid:
+            continue
+        if vault is not None and not vault.email(pid):
+            continue
+        cleaned.append({k: s[k] for k in STAKEHOLDER_FIELDS if s.get(k) not in (None, "")} | {"person_id": pid})
+    return cleaned
+
+
+def build_discovery_fs_tools(deployment: Deployment, run_dir: Path, vault: ContactVault | None = None) -> list:
     @tool("read_scored_accounts", "Read the accounts scored by the prioritization stage.", {})
     async def read_scored_accounts(args: dict[str, Any]) -> dict[str, Any]:
         accounts = _read_json(run_dir / "accounts_scored.json") or []
-        return {"content": [{"type": "text", "text": json.dumps(accounts)}]}
+        return {"content": [{"type": "text", "text": json.dumps(scrub(accounts))}]}
 
     @tool(
         "write_stakeholders",
-        "Write the final list of discovered stakeholders with verified emails. Overwrites any previous write this run.",
+        "Write the final list of discovered stakeholders (person_id, account_org_id, account_name, title, "
+        "seniority, email_status). Only people with a verified email held by the code are kept. "
+        "Overwrites any previous write this run.",
         {"type": "object", "properties": {"stakeholders": {"type": "array"}}, "required": ["stakeholders"]},
     )
     async def write_stakeholders(args: dict[str, Any]) -> dict[str, Any]:
-        stakeholders = args["stakeholders"]
+        stakeholders = clean_stakeholders(args["stakeholders"], vault)
         _write_json(run_dir / "stakeholders.json", stakeholders)
-        return {"content": [{"type": "text", "text": f"Wrote {len(stakeholders)} stakeholders."}]}
+        dropped = len(args["stakeholders"]) - len(stakeholders)
+        return {"content": [{"type": "text", "text": f"Wrote {len(stakeholders)} stakeholders"
+                                                      + (f" ({dropped} dropped: no verified email)." if dropped else ".")}]}
 
     return [read_scored_accounts, write_stakeholders]
 
@@ -66,13 +88,13 @@ def build_discovery_fs_tools(deployment: Deployment, run_dir: Path) -> list:
 def build_drafting_fs_tools(deployment: Deployment, run_dir: Path) -> list:
     @tool("read_stakeholders", "Read the stakeholders found by the discovery stage.", {})
     async def read_stakeholders(args: dict[str, Any]) -> dict[str, Any]:
-        stakeholders = _read_json(run_dir / "stakeholders.json") or []
-        return {"content": [{"type": "text", "text": json.dumps(stakeholders)}]}
+        stakeholders = clean_stakeholders(_read_json(run_dir / "stakeholders.json") or [], None)
+        return {"content": [{"type": "text", "text": json.dumps(scrub(stakeholders))}]}
 
     @tool("read_scored_accounts", "Read the accounts scored by the prioritization stage (for match rationale).", {})
     async def read_scored_accounts(args: dict[str, Any]) -> dict[str, Any]:
         accounts = _read_json(run_dir / "accounts_scored.json") or []
-        return {"content": [{"type": "text", "text": json.dumps(accounts)}]}
+        return {"content": [{"type": "text", "text": json.dumps(scrub(accounts))}]}
 
     @tool("read_positioning_doc", "Read this deployment's positioning/value-prop doc.", {})
     async def read_positioning_doc(args: dict[str, Any]) -> dict[str, Any]:
@@ -141,7 +163,9 @@ def build_learning_fs_tools(deployment: Deployment) -> list:
         raw = deployment.store.read_text(diff_log_key)
         if not raw:
             return {"content": [{"type": "text", "text": "[]"}]}
-        lines = raw.splitlines()[-limit:]
-        return {"content": [{"type": "text", "text": "[" + ",".join(lines) + "]"}]}
+        entries = [json.loads(line) for line in raw.splitlines()[-limit:] if line.strip()]
+        for e in entries:
+            e.pop("stakeholder_name", None)  # older log lines stored it; never shown to the agent
+        return {"content": [{"type": "text", "text": json.dumps(scrub(entries))}]}
 
     return [read_style_notes, write_style_notes, read_recent_diff_log]

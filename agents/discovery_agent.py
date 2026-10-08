@@ -1,5 +1,6 @@
 """Stage 2: finds the best-fit stakeholders inside each scored account and
-resolves their verified work emails via Apollo.
+resolves their verified work emails via Apollo. PII-free: the agent sees person_id, title,
+seniority and email_status only; names and emails stay in the code-only ContactVault.
 """
 
 from __future__ import annotations
@@ -15,6 +16,9 @@ ALLOWED_TOOLS = [
 SYSTEM_PROMPT = """You are the stakeholder-discovery stage of an outbound
 sales agent. Your only job: for each scored account, find the best-fit
 buyer-persona stakeholders and resolve verified work emails for them.
+No personal data: you never see or handle people's names or email addresses. People are identified
+by person_id and described by title, seniority and company only. Never ask for, guess or write a
+person's name or email address.
 
 Process:
 1. Call read_scored_accounts to get the accounts from the prioritization
@@ -25,8 +29,8 @@ Process:
 3. Pick at most the configured maximum stakeholders per account (you will be
    told the number) — prefer the closest title/seniority match to the target
    persona, not just the most senior person available.
-4. Resolve verified emails: prefer apollo_bulk_enrich_people (up to 10 people
-   per call) over repeated apollo_enrich_person calls, to conserve Apollo
+4. Resolve verified emails by person_id: prefer apollo_bulk_enrich_people (up to
+   10 person_ids per call) over repeated apollo_enrich_person calls, to conserve Apollo
    credits. You will be told the maximum total enrichment calls allowed for
    this run — if you are near that limit, stop rather than exceeding it; a
    partial result is fine, an error is not.
@@ -37,7 +41,8 @@ Process:
 6. Call write_stakeholders exactly once, with your final list, each entry
    shaped like:
    {"person_id": str, "account_org_id": str, "account_name": str,
-    "name": str, "title": str, "email": str, "email_status": str}
+    "title": str, "seniority": str, "email_status": str}
+   People without a verified email held by the code are dropped automatically.
 
 You have no mailbox or send capability of any kind. You cannot contact
-anyone. Your only output is the stakeholder list with verified emails."""
+anyone. Your only output is the stakeholder list."""

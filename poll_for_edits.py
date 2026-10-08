@@ -25,6 +25,8 @@ import sequencing
 from billing import SubscriptionInactive, require_active_subscription
 from deployment import Deployment, load_deployment
 from clients.mailbox_client import MailboxClient, normalize_for_diff
+from contacts import ContactVault
+from pii import scrub_text
 from tools.fs_tools import build_learning_fs_tools
 from agents import learning_agent
 
@@ -64,10 +66,11 @@ async def _invoke_learning_agent(deployment: Deployment, entry: dict[str, Any], 
         model=deployment.models.get("learning"),
         max_turns=20,
     )
+    # No-PII rule: everything below is already depersonalized (placeholders) and scrubbed.
     prompt = (
-        f"A human edit was detected for a draft to {entry['stakeholder_name']} at "
-        f"{entry['account_name']}.\n\n"
-        f"BEFORE (agent-generated):\n{entry['before_text']}\n\n"
+        f"A human edit was detected for a draft to a "
+        f"{entry.get('stakeholder_title') or 'contact'} at {entry['account_name']}.\n\n"
+        f"BEFORE (agent-generated):\n{entry['_before_safe']}\n\n"
         f"AFTER (human final, {entry['status']}):\n{after_text}\n\n"
         f"DIFF:\n{diff}\n\n"
         f"Decide what this teaches, then update style_notes.md accordingly."
@@ -81,7 +84,13 @@ async def poll_once(deployment: Deployment, dry_run: bool) -> int:
     # Built lazily: a fresh deployment with no open drafts yet shouldn't
     # need working mailbox OAuth just to run this cron job.
     mailbox = MailboxClient(deployment) if any(e.get("status") == "open" for e in audit) else None
+    vault = ContactVault(deployment)
     learned = 0
+
+    def safe(text: str, entry: dict[str, Any]) -> str:
+        contact = vault.get(entry.get("stakeholder_id")) or {"email": entry.get("to", ""),
+                                                             "name": entry.get("stakeholder_name", "")}
+        return scrub_text(ContactVault.depersonalize(text, contact, getattr(deployment, 'sender_names', [])))
 
     for entry in audit:
         if entry.get("status") != "open":
@@ -116,13 +125,15 @@ async def poll_once(deployment: Deployment, dry_run: bool) -> int:
         if after_text is None:
             continue
 
-        before_norm = normalize_for_diff(entry["before_text"])
+        before_norm = safe(normalize_for_diff(entry["before_text"]), entry)
+        after_text = safe(after_text, entry)
         if after_text == before_norm:
             entry["status"] = f"unchanged_{source}"
             continue
 
         diff = _compute_diff(before_norm, after_text)
-        print(f"[poll_for_edits] {entry['stakeholder_name']} ({entry['account_name']}): "
+        entry["_before_safe"] = before_norm
+        print(f"[poll_for_edits] {entry.get('title') or entry.get('stakeholder_title') or 'contact'} ({entry['account_name']}): "
               f"detected {source} edit\n{diff}\n")
 
         if not dry_run:
@@ -132,7 +143,6 @@ async def poll_once(deployment: Deployment, dry_run: bool) -> int:
                 "detected_at": datetime.now(timezone.utc).isoformat(),
                 "source": source,
                 "account_name": entry["account_name"],
-                "stakeholder_name": entry["stakeholder_name"],
                 "diff": diff,
             })
             entry["status"] = f"learned_{source}"
@@ -141,6 +151,8 @@ async def poll_once(deployment: Deployment, dry_run: bool) -> int:
             entry_preview_status = f"would_learn_{source}"
             print(f"[poll_for_edits] --dry-run: not invoking learning_agent (status would become {entry_preview_status})")
 
+    for entry in audit:
+        entry.pop("_before_safe", None)
     _save_audit(deployment, audit)
     return learned
 

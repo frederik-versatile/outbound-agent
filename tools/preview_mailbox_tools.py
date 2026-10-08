@@ -19,11 +19,13 @@ from typing import Any
 
 from claude_agent_sdk import tool, create_sdk_mcp_server
 
-from tools.mailbox_tools import CREATE_DRAFT_SCHEMA, append_drafts_created, em_dash_error
+from contacts import ContactVault
+from tools.mailbox_tools import CREATE_DRAFT_SCHEMA, append_drafts_created, prepare_draft
 
 
 def build_preview_mailbox_tools(
-    run_dir: Path, max_drafts_per_run: int, *, sequence_step: int = 0
+    run_dir: Path, max_drafts_per_run: int, *, sequence_step: int = 0,
+    vault: ContactVault | None = None, fixed_contact: dict[str, Any] | None = None,
 ) -> list:
     preview_dir = run_dir / "drafts_preview"
     preview_dir.mkdir(parents=True, exist_ok=True)
@@ -44,22 +46,24 @@ def build_preview_mailbox_tools(
                 }],
                 "is_error": True,
             }
-        error = em_dash_error(args["subject"], args["body_text"])
-        if error:
-            return {"content": [{"type": "text", "text": error}], "is_error": True}
+        prepared = prepare_draft(args, vault, fixed_contact)
+        if isinstance(prepared, str):
+            return {"content": [{"type": "text", "text": prepared}], "is_error": True}
+        contact, merged_subject, merged_body = prepared
 
         drafts_created["count"] += 1
         n = drafts_created["count"]
         tracking_id = str(uuid.uuid4())
-        safe_name = args["stakeholder_name"].replace("/", "-").replace(" ", "_")
-        preview_path = preview_dir / f"{n:03d}_{safe_name}.md"
+        person_id = str(args.get("stakeholder_id") or contact.get("person_id") or "contact")
+        preview_path = preview_dir / f"{n:03d}_{person_id}.md"
+        # The preview file is for the human reviewer, so it shows the merged email.
         preview_path.write_text(
             f"# DRY RUN — not sent, not drafted in any real mailbox\n\n"
-            f"**To:** {args['to']}  \n"
+            f"**To:** {contact['email']}  \n"
             f"**Account:** {args['account_name']}  \n"
-            f"**Stakeholder:** {args['stakeholder_name']}  \n"
-            f"**Subject:** {args['subject']}\n\n"
-            f"---\n\n{args['body_text']}\n"
+            f"**Stakeholder:** {contact.get('name', '')} ({contact.get('title', '')})  \n"
+            f"**Subject:** {merged_subject}\n\n"
+            f"---\n\n{merged_body}\n"
         )
 
         append_drafts_created(run_dir, {
@@ -67,25 +71,28 @@ def build_preview_mailbox_tools(
             "draft_ref": f"preview-{tracking_id}",
             "provider": "preview",
             "thread_id": f"preview-thread-{tracking_id}",
-            "to": args["to"],
+            "to": contact["email"],
             "subject": args["subject"],
             "account_id": args.get("account_id"),
             "account_name": args["account_name"],
-            "stakeholder_id": args.get("stakeholder_id"),
-            "stakeholder_name": args["stakeholder_name"],
+            "stakeholder_id": person_id,
+            "stakeholder_name": contact.get("name", ""),
+            "stakeholder_title": contact.get("title", ""),
             "sequence_step": sequence_step,
         })
 
         return {"content": [{
             "type": "text",
-            "text": f"[DRY RUN] Preview written to {preview_path}. "
+            "text": f"[DRY RUN] Preview {n:03d} written. "
                     f"{n}/{max_drafts_per_run} drafts used this run.",
         }]}
 
     return [create_draft]
 
 
-def preview_mailbox_server(run_dir: Path, max_drafts_per_run: int, *, sequence_step: int = 0):
+def preview_mailbox_server(run_dir: Path, max_drafts_per_run: int, *, sequence_step: int = 0,
+                           vault: ContactVault | None = None):
     return create_sdk_mcp_server(
-        name="mailbox", tools=build_preview_mailbox_tools(run_dir, max_drafts_per_run, sequence_step=sequence_step)
+        name="mailbox",
+        tools=build_preview_mailbox_tools(run_dir, max_drafts_per_run, sequence_step=sequence_step, vault=vault),
     )

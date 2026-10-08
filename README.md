@@ -78,27 +78,27 @@ cp .env.example .env                  # fill in ANTHROPIC_API_KEY
 
 ### Onboard a customer deployment
 
+Every customer is a client project in the Agents workspace, and its outbound config lives in that
+client's folder (see `deployment.py`):
+
 ```bash
-cp config/deployments/_example.yaml config/deployments/acme-corp.yaml
-cp config/icp_criteria/_example.md   config/icp_criteria/acme-corp.md
-cp config/positioning/_example.md    config/positioning/acme-corp.md
-cp config/sequences/_example.yaml    config/sequences/acme-corp.yaml
+C="../../../Clients/Acme Corp/outbound" && mkdir -p "$C"
+cp config/deployments/_example.yaml "$C/outbound.yaml"
+cp config/icp_criteria/_example.md   "$C/icp.md"
+cp config/positioning/_example.md    "$C/positioning.md"
+cp config/sequences/_example.yaml    "$C/sequence.yaml"
 ```
 
-Edit `acme-corp.yaml`: set `deployment_id: acme-corp` (must match the
-filename), `mail_provider`, safety limits, and `apollo_api_key_env`. Fill in
-the ICP and positioning docs with the customer's real criteria/pitch, and
-tune the sequence doc's step wait-times/angles/recycle window if the
-defaults (4 days per step, 90-day recycle) aren't right for this customer.
+Edit `outbound.yaml`: set `deployment_id: acme-corp`, `mail_provider`, safety limits and
+`sender_names`. Fill in the ICP and positioning docs with the customer's real criteria/pitch, and
+tune the sequence doc's step wait-times/angles/recycle window if the defaults (4 days per step,
+90-day recycle) aren't right for this customer. Register it on the client (lock register):
 
-Add the Apollo key to `.env`:
-
-```
-APOLLO_API_KEY_ACME_CORP=...
+```bash
+cd "../../Client template" && python3 new_client.py "Acme Corp" --outbound acme-corp --refresh
 ```
 
-(the name just has to match what `apollo_api_key_env` in the deployment
-YAML says).
+Store the client's Apollo key in the macOS Keychain (hidden prompt, validated first):
 
 ```bash
 python setup_apollo.py --deployment acme-corp
@@ -202,6 +202,11 @@ set, every request gets a 401, never an open page.
 
 ## Cloud deployment (Render)
 
+> Client configs now live outside this repo (`Agents/Clients/<Client>/outbound/`). Before a cloud
+> deploy, ship the client's `outbound/` folder with the service and point `OUTBOUND_CLIENTS_DIR`
+> at its parent; the Apollo key comes from the env var named by `apollo_api_key_env` there (no
+> Keychain in the cloud).
+
 This is meant to run unattended: the client never touches it, they only see
 drafts appear in their own inbox, and access is gated by whether their
 subscription is active. `render.yaml` defines the whole thing as one
@@ -259,6 +264,13 @@ non-paying customer.
 
 ## Safety
 
+**No PII reaches Claude.** Apollo people results go into a code-only contact store
+(`contacts.py`); every agent works with `person_id` + title, seniority and company. Drafts are
+written with `{{first_name}}`-style placeholders that the code fills in when it creates the draft;
+the audit trail keeps the placeholder version, and edits are depersonalized (`{{first_name}}`,
+`{{email}}`, `{{sender_name}}`) before the learning stage sees them. `pii.scrub` is a backstop on
+every tool result. Tested in `tests/test_no_pii.py`.
+
 This codebase can create email drafts. **It cannot send email — the
 capability does not exist anywhere in the code**, not merely "the model is
 told not to":
@@ -309,10 +321,10 @@ setup_oauth_outlook.py      One-time Outlook OAuth per deployment
 setup_apollo.py             Validates an Apollo API key per deployment
 setup_google_sheets.py      One-time Sheets service-account setup (optional, hire-sheet only)
 render.yaml                Cloud deployment blueprint (3 cron jobs + dashboard web service + Key Value)
-config/deployments/         One YAML per customer (mail provider, limits, billing id, hire sheet)
-config/icp_criteria/        One ICP doc per customer
-config/positioning/         One positioning/value-prop doc per customer
-config/sequences/           One cadence doc per customer (steps, wait times, recycle window)
+config/                     _example templates only; real configs live in Clients/<Client>/outbound/
+                            (outbound.yaml, icp.md, positioning.md, sequence.yaml)
+contacts.py                 Code-only contact store + placeholder merge/depersonalize (no-PII rule)
+pii.py                      Output scrub backstop (mirrors Agents/Global/Shared/pii_guard.py)
 secrets/                    Local-dev-only OAuth token cache (gitignored) — see store.py
 clients/                    Thin API wrappers (Apollo, Gmail, Outlook, Sheets, mailbox facade)
 agents/                     System prompt + tool allowlist per pipeline stage
